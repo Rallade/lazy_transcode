@@ -12,12 +12,12 @@ except FileNotFoundError:
 setup(
     name="lazy-transcode",
     version="1.0.0",
-    author="Your Name",
-    author_email="your.email@example.com",
+    author="Rallade",
+    author_email="rallade@hotmail.com",
     description="A smart video transcoding utility with VMAF-based quality optimization",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/yourusername/lazy-transcode",
+    url="https://github.com/Rallade/lazy_transcode",
     packages=find_packages(),
     classifiers=[
         "Development Status :: 4 - Beta",

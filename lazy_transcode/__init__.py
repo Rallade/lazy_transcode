@@ -3,8 +3,8 @@ Lazy Transcode - A smart video transcoding utility with VMAF-based quality optim
 """
 
 __version__ = "1.0.0"
-__author__ = "Your Name"
-__email__ = "your.email@example.com"
+__author__ = "Rallade"
+__email__ = "rallade@hotmail.com"
 
 # Import configuration utilities
 from .config import get_config, get_test_root, load_env_file

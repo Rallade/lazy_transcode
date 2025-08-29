@@ -22,7 +22,7 @@ pip install lazy-transcode
 Or install from source:
 
 ```bash
-git clone https://github.com/yourusername/lazy-transcode.git
+git clone https://github.com/Rallade/lazy_transcode.git
 cd lazy-transcode
 pip install -e .
 ```
