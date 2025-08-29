@@ -1,0 +1,11 @@
+# Development dependencies
+pytest>=6.0.0
+black>=21.0.0
+flake8>=3.9.0
+mypy>=0.910
+setuptools>=45.0.0
+wheel>=0.36.0
+twine>=3.4.0
+
+# Optional runtime dependencies
+psutil>=5.0.0

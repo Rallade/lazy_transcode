@@ -1,0 +1,62 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lazy-transcode"
+version = "1.0.0"
+description = "A smart video transcoding utility with VMAF-based quality optimization"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "Your Name", email = "your.email@example.com"},
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Multimedia :: Video :: Conversion",
+]
+requires-python = ">=3.8"
+dependencies = [
+    "tqdm>=4.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=6.0.0",
+    "black>=21.0.0",
+    "flake8>=3.9.0",
+    "mypy>=0.910",
+]
+full = [
+    "psutil>=5.0.0",
+]
+
+[project.scripts]
+lazy-transcode = "lazy_transcode.cli:main_transcode"
+lazy-transcode-manager = "lazy_transcode.cli:main_manager"
+
+[project.urls]
+Homepage = "https://github.com/yourusername/lazy-transcode"
+Repository = "https://github.com/yourusername/lazy-transcode.git"
+Issues = "https://github.com/yourusername/lazy-transcode/issues"
+
+[tool.setuptools.packages.find]
+include = ["lazy_transcode*"]
+
+[tool.black]
+line-length = 88
+target-version = ['py38']
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true

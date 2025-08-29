@@ -1,0 +1,7 @@
+include README.md
+include LICENSE
+include requirements.txt
+include requirements-dev.txt
+recursive-include lazy_transcode *.py
+recursive-exclude lazy_transcode *.pyc
+recursive-exclude lazy_transcode __pycache__
