@@ -183,16 +183,16 @@ def optimize_encoder_settings_vbr(infile: Path, encoder: str, encoder_type: str,
     except:
         source_size_gb = 0
     
-    # Intelligent parameter search spaces - logical progression: Fast → Medium → Slow
-    # Start with fastest, progress to higher quality if needed
+    # Intelligent parameter search spaces - optimal progression: Slow → Medium → Fast
+    # Start with highest quality, work backwards to find efficiency sweet spot
     if encoder_type == "hardware":
         # Hardware: preset has biggest impact, then refs, then bf
-        presets = ["fast", "medium", "slow"]  # Logical progression
+        presets = ["slow", "medium", "fast"]  # Quality-first progression
         bf_values = [3, 4, 2]       # Start with standard, then higher, then lower  
         refs_values = [3, 4, 2]     # Start with standard, then higher, then lower
     else:  # CPU
         # CPU: preset has massive impact, refs moderate, bf smaller
-        presets = ["fast", "medium", "slow"]  # Logical progression
+        presets = ["slow", "medium", "fast"]  # Quality-first progression
         bf_values = [4, 6, 3]       # Start with good standard, then higher, then lower
         refs_values = [4, 6, 3]     # Start with good standard, then higher, then lower
     
@@ -200,6 +200,7 @@ def optimize_encoder_settings_vbr(infile: Path, encoder: str, encoder_type: str,
     lowest_bitrate = float('inf')
     trials = 0
     abandoned = False
+    preset_results = []  # Track results by preset for rollback analysis
     
     # Early exit tracking
     last_improvement_gain = 0
@@ -226,8 +227,8 @@ def optimize_encoder_settings_vbr(infile: Path, encoder: str, encoder_type: str,
     except Exception:
         source_bitrate_kbps = 8000
     
-    # Phase 1: Test fast → medium → slow preset progression
-    print(f"[VBR] Phase 1: Testing preset progression (fast → medium → slow)")
+    # Phase 1: Test slow → medium → fast preset progression  
+    print(f"[VBR] Phase 1: Testing preset progression (slow → medium → fast)")
     tested_combinations = set()  # Track tested combinations to avoid duplicates
     
     for preset in presets:
@@ -264,6 +265,17 @@ def optimize_encoder_settings_vbr(infile: Path, encoder: str, encoder_type: str,
                     abandoned = True
                     break
                 
+                # Handle preset efficiency detection
+                if result.get('preset_insufficient'):
+                    quality_gap = result.get('quality_gap', 0)
+                    print(f"[VBR-SKIP] {preset} preset insufficient ({quality_gap:.1f} points below target) - trying faster preset")
+                    break  # Break out of bf/refs loops for this preset
+                
+                if result.get('preset_overkill'):
+                    excess = result.get('excess_quality', 0)
+                    print(f"[VBR-SKIP] {preset} preset delivers {excess:.1f} points excess quality - moving to more efficient preset")
+                    break  # Break out of bf/refs loops for this preset
+                
                 if result and result.get('success'):
                     # Calculate improvement metrics
                     previous_best = lowest_bitrate if best_result else float('inf')
@@ -274,6 +286,15 @@ def optimize_encoder_settings_vbr(infile: Path, encoder: str, encoder_type: str,
                     if result['bitrate'] < lowest_bitrate:
                         lowest_bitrate = result['bitrate']
                         best_result = result.copy()
+                        
+                        # Store preset result for rollback analysis
+                        preset_results.append({
+                            'preset': preset,
+                            'bitrate': result['bitrate'],
+                            'vmaf_score': result['vmaf_score'],
+                            'bf': bf,
+                            'refs': refs
+                        })
                         
                         # Calculate space savings projection
                         try:
@@ -347,13 +368,39 @@ def optimize_encoder_settings_vbr(infile: Path, encoder: str, encoder_type: str,
                         print(f"[VBR-EARLY-EXIT] Quality significantly exceeds target ({result['vmaf_score']:.2f} vs {target_vmaf:.1f})")
                         break
                     
-                    # 6. Smart preset progression - if fast/medium failing, skip to slow
-                    if (preset in ["fast", "medium"] and 
+                    # 6. Smart preset progression - if slow/medium failing, skip to fast
+                    if (preset in ["slow", "medium"] and 
                         vmaf_margin < -vmaf_tolerance * 2 and  # Significantly below target
                         result['bitrate'] > source_bitrate_kbps * 0.8):  # Still high bitrate
-                        print(f"[VBR-EARLY-EXIT] {preset} preset insufficient - skipping to slow preset")
-                        # Force break out of current preset loops to try slow
+                        print(f"[VBR-EARLY-EXIT] {preset} preset insufficient - skipping to faster preset")
+                        # Force break out of current preset loops to try fast
                         break
+                    
+                    # 7. Preset efficiency analysis - detect when we should rollback to previous preset
+                    if len(preset_results) >= 2:
+                        current_preset_result = preset_results[-1]  # Current result
+                        previous_preset_result = preset_results[-2]  # Previous (slower) preset result
+                        
+                        # Calculate file size difference
+                        size_ratio = current_preset_result['bitrate'] / previous_preset_result['bitrate']
+                        quality_diff = abs(current_preset_result['vmaf_score'] - previous_preset_result['vmaf_score'])
+                        
+                        # If current preset gives >105% of previous file size with similar quality, rollback
+                        if size_ratio > 1.05 and quality_diff < vmaf_tolerance:
+                            print(f"[VBR-ROLLBACK] {preset} preset gives {size_ratio:.1%} size vs {preset_results[-2]['preset']} "
+                                  f"with similar quality (Δ{quality_diff:.2f}) - rolling back to {preset_results[-2]['preset']}")
+                            # Restore previous result as best
+                            best_result = {
+                                'success': True,
+                                'bitrate': previous_preset_result['bitrate'],
+                                'preset': previous_preset_result['preset'],
+                                'bf': previous_preset_result['bf'],
+                                'refs': previous_preset_result['refs'],
+                                'vmaf_score': previous_preset_result['vmaf_score'],
+                                'filesize': int((previous_preset_result['bitrate'] * 1000 * get_duration_sec(infile)) / 8) if get_duration_sec(infile) > 0 else 0
+                            }
+                            lowest_bitrate = previous_preset_result['bitrate']
+                            break  # Exit optimization, we found our sweet spot
                     
                     # Early success - check if we should continue optimizing (existing logic)
                     if result['bitrate'] < 2000:  # Excellent result
@@ -548,17 +595,32 @@ def _bisect_bitrate(infile: Path, encoder: str, encoder_type: str,
             # Calculate projected space savings
             if duration > 0 and source_size > 0:
                 projected_size = int((test_bitrate_val * 1000 * duration) / 8)
-                relative_size_pct = (projected_size / source_size) * 100
-                space_saved_gb = (source_size - projected_size) / (1024**3)
                 
                 print(f"[VBR-BISECT] Iteration {iteration+1}: Testing {test_bitrate_val}kbps "
                       f"[bounds: {current_min}-{current_max}kbps] "
-                      f"(~{relative_size_pct:.1f}% of original, ~{space_saved_gb:.2f}GB saved)")
+                      f"(Original: {source_size/(1024**3):.2f}GB → Projected: {projected_size/(1024**3):.2f}GB)")
             else:
                 print(f"[VBR-BISECT] Iteration {iteration+1}: Testing {test_bitrate_val}kbps "
                       f"[bounds: {current_min}-{current_max}kbps]")
             
             vmaf_result = test_bitrate_func(test_bitrate_val)
+            
+            # SMART EARLY DETECTION: 
+            # For slow→medium→fast progression, detect when preset is insufficient early
+            if iteration == 0:
+                if vmaf_result < target_vmaf - (vmaf_tolerance * 2):
+                    print(f"[VBR-BISECT] Early detection: {vmaf_result:.2f} VMAF significantly below target")
+                    print(f"[VBR-BISECT] {preset} preset insufficient even at high bitrate - will try faster preset")
+                    return {
+                        'success': False,
+                        'preset_insufficient': True,
+                        'quality_gap': target_vmaf - vmaf_result,
+                        'bitrate': test_bitrate_val,
+                        'vmaf_score': vmaf_result
+                    }
+                elif vmaf_result > target_vmaf + (vmaf_tolerance * 4):
+                    print(f"[VBR-BISECT] Early detection: {vmaf_result:.2f} VMAF way above target")
+                    print(f"[VBR-BISECT] {preset} preset delivers significant excess quality - continuing with aggressive reduction")
             
             if abs(vmaf_result - target_vmaf) <= vmaf_tolerance:
                 # Target achieved
