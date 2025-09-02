@@ -1,4 +1,5 @@
 import os, sys, shlex, signal, atexit, shutil, random, subprocess, argparse, re, time, threading
+import asyncio
 from pathlib import Path
 try:
     from tqdm import tqdm
@@ -26,6 +27,12 @@ import concurrent.futures
 import threading
 from dataclasses import dataclass
 from typing import Optional, List
+import queue
+
+# Import modular components
+from .modules.encoder_config import EncoderConfigBuilder
+from .modules.vmaf_evaluator import VMAfEvaluator
+from .modules.file_manager import FileManager
 
 # --- config defaults ---
 EXTS = [".mkv", ".mp4", ".mov", ".ts"]
@@ -41,51 +48,22 @@ TEMP_FILES: set[str] = set()
 BASELINE_VMAF: dict[str, float] = {}
 DEBUG = False  # set by --debug
 
-def _startup_scavenge(base: Path):
-    """Remove stale temp/sample artifacts from previous aborted runs.
-    Patterns cleaned:
-      *.sample_clip.*  (sampling extraction)
-      *.qp*_sample.*   (sampling encodes)
-      *.transcode.*    (intermediate full encode output)
-      *.bak.*          (leftover backup if prior run interrupted)
-      *clip*.sample.*  (cascading clip artifacts)
-    Only deletes .bak if the presumed restored original also exists.
-    """
-    patterns = ["*.sample_clip.*", "*.transcode.*", "*clip*.sample.*"]
-    # Broad scan once; avoid deep recursion cost by using rglob for distinct patterns
-    removed = 0
-    try:
-        for pat in patterns:
-            for f in base.rglob(pat):
-                try:
-                    os.remove(f)
-                    removed += 1
-                except Exception:
-                    pass
-        # Remove qp sample artifacts (_sample before extension)
-        for f in base.rglob("*_sample.*"):
-            if ".qp" in f.stem:  # heuristic to ensure it's ours (qpNN_sample)
-                try:
-                    os.remove(f)
-                    removed += 1
-                except Exception:
-                    pass
-        # Remove stale backups: name.bak.ext where name.ext exists
-        for f in base.rglob("*.bak.*"):
-            try:
-                stem_parts = f.name.split('.bak.')
-                if len(stem_parts) == 2:
-                    orig_name = stem_parts[0] + '.' + stem_parts[1]
-                    orig_path = f.with_name(orig_name)
-                    if orig_path.exists():
-                        os.remove(f)
-                        removed += 1
-            except Exception:
-                pass
-        if removed:
-            print(f"[CLEANUP] Removed {removed} stale temp file(s) from previous run.")
-    except Exception:
-        pass
+def get_next_transcoded_dir(base_path: Path) -> Path:
+    """Find the next available Transcoded_X directory name to avoid overwriting existing folders."""
+    base_name = "Transcoded"
+    candidate_dir = base_path / base_name
+    
+    # If Transcoded doesn't exist, use it
+    if not candidate_dir.exists():
+        return candidate_dir
+    
+    # Find next available Transcoded_X
+    counter = 2
+    while True:
+        candidate_dir = base_path / f"{base_name}_{counter}"
+        if not candidate_dir.exists():
+            return candidate_dir
+        counter += 1
 
 def _cleanup():
     for f in list(TEMP_FILES):
@@ -160,14 +138,9 @@ def start_cpu_monitor(duration_seconds: int = 0) -> tuple[threading.Thread, thre
 
 @lru_cache(maxsize=1024)
 def ffprobe_field(file: Path, key: str) -> str | None:
-    cmd = ["ffprobe", "-v", "error", "-select_streams", "v:0",
-           "-show_entries", f"stream={key}",
-           "-of", "default=nk=1:nw=1", str(file)]
-    try:
-        out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL, text=True).strip()
-        return out if out and out != "unknown" else None
-    except subprocess.CalledProcessError:
-        return None
+    """Get field from video stream using ffprobe - delegates to module version."""
+    from .modules.encoder_config import ffprobe_field as probe_field
+    return probe_field(file, key)
 
 @lru_cache(maxsize=4096)
 def get_duration_sec(file: Path) -> float:
@@ -229,119 +202,430 @@ def _extract_hdr_metadata(file: Path) -> tuple[str | None, str | None]:
     """Extract static HDR10 metadata (master_display, max_cll) if present.
     Returns (master_display, max_cll) strings usable directly with ffmpeg -master_display / -max_cll.
     """
-    try:
-        # Parse stream section for master_display / max_cll lines
-        cmd = ["ffprobe", "-v", "error", "-show_streams", "-select_streams", "v:0", str(file)]
-        out = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL)
-        master = None
-        max_cll = None
-        for line in out.splitlines():
-            line = line.strip()
-            if line.startswith("master_display="):
-                master = line.split("=",1)[1].strip()
-            elif line.startswith("max_cll="):
-                max_cll = line.split("=",1)[1].strip()
-        return master or None, max_cll or None
-    except Exception:
-        return None, None
+    # Import from module to avoid duplication
+    from .modules.encoder_config import _extract_hdr_metadata as extract_hdr
+    return extract_hdr(file)
 
 HDR_METADATA_ANNOUNCED: set[str] = set()
 
 def build_encode_cmd(infile: Path, outfile: Path, encoder: str, encoder_type: str, qp: int, preserve_hdr_metadata: bool = True) -> list[str]:
-    pixfmt = ffprobe_field(infile, "pix_fmt")
-    prim   = ffprobe_field(infile, "color_primaries")
-    trc    = ffprobe_field(infile, "color_transfer")
-    matrix = ffprobe_field(infile, "colorspace")
-    rng    = ffprobe_field(infile, "color_range")
-
-    is10 = bool(pixfmt and ("10le" in pixfmt or "p10" in pixfmt))
-    profile = "main10" if is10 else "main"
-    pix_out = "p010le" if is10 else "nv12"
-
-    color_args: list[str] = []
-    if prim:   color_args += ["-color_primaries:v:0", prim]
-    if trc:    color_args += ["-color_trc:v:0",       trc]
-    if matrix: color_args += ["-colorspace:v:0",      matrix]
-    if rng:    color_args += ["-color_range:v:0",     rng]
-
-    # Base command
-    cmd = [
-        "ffmpeg", "-hide_banner", "-y",
-    ]
-    if DEBUG:
-        cmd += ["-loglevel", "info"]
-    cmd += [
-        "-i", str(infile),
-        "-map", "0", "-map_metadata", "0", "-map_chapters", "0",
-        "-c:v", encoder,
-    ]
-
-    # Encoder-specific settings
+    """Build encoding command using EncoderConfigBuilder."""
+    builder = EncoderConfigBuilder()
+    
+    # Determine encoder type for threading
     if encoder_type == "hardware":
-        if encoder == "hevc_amf":
-            cmd.extend([
-                "-quality", "quality",
-                "-rc", "cqp", "-qp_i", str(qp), "-qp_p", str(qp), "-qp_b", str(qp),
-                "-profile:v", profile,
-                "-pix_fmt", pix_out,
-            ])
-        elif encoder == "hevc_nvenc":
-            cmd.extend([
-                "-preset", "medium",
-                "-rc", "constqp", "-qp", str(qp),
-                "-profile:v", profile,
-                "-pix_fmt", pix_out,
-            ])
-        elif encoder == "hevc_qsv":
-            cmd.extend([
-                "-preset", "medium",
-                "-global_quality", str(qp),
-                "-profile:v", profile,
-                "-pix_fmt", pix_out,
-            ])
-    else:  # software (libx265)
-        # Map QP to CRF (roughly equivalent)
-        crf = max(0, min(51, qp))
-        x265_params = [f"crf={crf}"]
+        threads = 4
+    else:
+        threads = os.cpu_count() or 16
+    
+    # Get video dimensions (not used by new builder but kept for compatibility)
+    width, height = 1920, 1080  # Default fallback
+    
+    cmd = builder.build_standard_encode_cmd(
+        str(infile), str(outfile), encoder, "medium", qp,
+        width, height, threads=threads, 
+        preserve_hdr=preserve_hdr_metadata, debug=DEBUG
+    )
+    
+    # Handle HDR metadata announcement for hardware encoders
+    if preserve_hdr_metadata and encoder_type == "hardware":
+        from .modules.encoder_config import ffprobe_field, _extract_hdr_metadata
+        pixfmt = ffprobe_field(infile, "pix_fmt")
+        is10 = bool(pixfmt and ("10le" in pixfmt or "p10" in pixfmt))
         if is10:
-            # Enable hdr10 signaling if we will embed metadata
-            if preserve_hdr_metadata:
-                master_display, max_cll = _extract_hdr_metadata(infile)
-                if master_display or max_cll:
-                    x265_params.append("hdr10=1")
-                    x265_params.append("hdr10-opt=1")
-                    if master_display:
-                        x265_params.append(f"master-display={master_display}")
-                    if max_cll:
-                        x265_params.append(f"max-cll={max_cll}")
-        cmd.extend([
-            "-x265-params", ":".join(x265_params),
-            "-preset", "medium",
-            "-pix_fmt", pix_out,
-        ])
-
-    # Inject static HDR metadata for hardware encoders (or any non-x265 path) using global options
-    if preserve_hdr_metadata and encoder_type == "hardware" and is10:
-        master_display, max_cll = _extract_hdr_metadata(infile)
-        if master_display:
-            cmd.extend(["-master_display", master_display])
-        if max_cll:
-            cmd.extend(["-max_cll", max_cll])
-        if (master_display or max_cll) and str(infile) not in HDR_METADATA_ANNOUNCED:
-            print(f"[HDR] Preserving static HDR10 metadata for {infile.name}: "
-                  f"master_display={'yes' if master_display else 'no'}, max_cll={'yes' if max_cll else 'no'}")
-            HDR_METADATA_ANNOUNCED.add(str(infile))
-
-    # Add color args and stream copying
-    cmd.extend(color_args)
-    cmd.extend([
-        "-c:a", "copy", "-c:s", "copy", "-c:d", "copy", "-c:t", "copy",
-        "-copy_unknown",
-        "-progress", "pipe:1", "-nostats",
-        str(outfile)
-    ])
-
+            master_display, max_cll = _extract_hdr_metadata(infile)
+            if (master_display or max_cll) and str(infile) not in HDR_METADATA_ANNOUNCED:
+                print(f"[HDR] Preserving static HDR10 metadata for {infile.name}: "
+                      f"master_display={'yes' if master_display else 'no'}, max_cll={'yes' if max_cll else 'no'}")
+                HDR_METADATA_ANNOUNCED.add(str(infile))
+    
     return cmd
+
+def build_vbr_encode_cmd(infile: Path, outfile: Path, encoder: str, encoder_type: str, 
+                        bitrate_kbps: int, preset: str = "medium", bf: int = 3, 
+                        refs: int = 3, use_advanced_features: bool = True, 
+                        preserve_hdr_metadata: bool = True) -> list[str]:
+    """Build VBR encoding command using EncoderConfigBuilder."""
+    builder = EncoderConfigBuilder()
+    
+    # Determine threading based on encoder type
+    if encoder_type == "hardware":
+        threads = 4
+    else:
+        threads = os.cpu_count() or 16
+    
+    # Get video dimensions for proper aspect ratio handling
+    width, height = 1920, 1080  # Default fallback
+    
+    return builder.build_vbr_encode_cmd(
+        str(infile), str(outfile), encoder, preset, bitrate_kbps,
+        bf, refs, width, height, threads=threads,
+        preserve_hdr=preserve_hdr_metadata, debug=DEBUG
+    )
+
+def encode_vbr_with_progress(infile: Path, outfile: Path, encoder: str, encoder_type: str, 
+                           bitrate_kbps: int, preset: str = "medium", bf: int = 3, 
+                           refs: int = 3, preserve_hdr_metadata: bool = True) -> bool:
+    """Encode a file using VBR with progress tracking."""
+    dur = get_duration_sec(infile)
+    if dur <= 0:
+        print(f"[WARN] could not get duration for {infile}")
+    TEMP_FILES.add(str(outfile))
+
+    cmd = build_vbr_encode_cmd(infile, outfile, encoder, encoder_type, bitrate_kbps, 
+                              preset, bf, refs, preserve_hdr_metadata=preserve_hdr_metadata)
+    
+    # capture progress (stdout) + errors (stderr)
+    if DEBUG:
+        print("[VBR-ENCODE] " + " ".join(shlex.quote(c) for c in cmd))
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    
+    # Use tqdm for individual file progress
+    with tqdm(total=100, desc=f"VBR Encoding {infile.name[:25]} ({bitrate_kbps}k)", unit="%", 
+             position=1, leave=False, bar_format="{desc}: {percentage:3.0f}%|{bar}| {elapsed}") as pbar:
+        last_pct = 0
+        if proc.stdout:
+            for line in proc.stdout:
+                # Handle out_time_ms, out_time_us, or out_time robustly
+                if any(line.startswith(prefix) for prefix in ["out_time_ms=", "out_time_us=", "out_time="]) and dur > 0:
+                    try:
+                        time_str = line.split("=",1)[1].strip()
+                        if time_str == "N/A":
+                            continue
+                        
+                        # Parse time based on format
+                        if line.startswith("out_time_ms="):
+                            sec = int(time_str) / 1_000_000  # microseconds to seconds
+                        elif line.startswith("out_time_us="):
+                            sec = int(time_str) / 1_000_000  # microseconds to seconds
+                        elif line.startswith("out_time="):
+                            # Handle time format like "00:01:23.45"
+                            if ":" in time_str:
+                                parts = time_str.split(":")
+                                if len(parts) >= 3:
+                                    hours = float(parts[0])
+                                    minutes = float(parts[1]) 
+                                    seconds = float(parts[2])
+                                    sec = hours * 3600 + minutes * 60 + seconds
+                                else:
+                                    continue
+                            else:
+                                sec = float(time_str)
+                        else:
+                            continue
+                            
+                        pct = min(100.0, (sec/dur)*100.0)
+                        update_amt = int(pct) - last_pct
+                        if update_amt > 0:
+                            pbar.update(update_amt)
+                            last_pct = int(pct)
+                    except (ValueError, IndexError):
+                        # Skip invalid progress lines
+                        continue
+
+    proc.wait()
+    if proc.returncode == 0:
+        # Keep tracking until caller finalizes (swap/delete) to allow cleanup if interrupted mid-swap
+        return True
+    else:
+        err = proc.stderr.read() if proc.stderr else ""
+        print(f"[ERROR] VBR encoding failed for {infile}\n{err}")
+        return False
+
+def calculate_intelligent_vbr_bounds(infile: Path, target_vmaf: float, expand_factor: int = 0) -> tuple[int, int]:
+    """Calculate intelligent VBR bitrate bounds with progressive expansion."""
+    
+    # Get source file bitrate
+    try:
+        result = subprocess.run([
+            "ffprobe", "-v", "error", "-select_streams", "v:0", 
+            "-show_entries", "stream=bit_rate", "-of", "csv=p=0", str(infile)
+        ], capture_output=True, text=True, timeout=30)
+        
+        if result.returncode == 0 and result.stdout.strip():
+            source_bitrate_bps = int(result.stdout.strip())
+            source_bitrate_kbps = source_bitrate_bps // 1000
+        else:
+            # Fallback: estimate from file size and duration
+            duration = get_duration_sec(infile)
+            if duration and duration > 0:
+                file_size_bits = infile.stat().st_size * 8
+                source_bitrate_kbps = int(file_size_bits / duration / 1000)
+            else:
+                source_bitrate_kbps = 8000  # Conservative fallback
+                
+    except (subprocess.TimeoutExpired, subprocess.SubprocessError, ValueError):
+        source_bitrate_kbps = 8000  # Conservative fallback
+    
+    print(f"[VBR-BOUNDS] Source bitrate: {source_bitrate_kbps}kbps")
+    
+    # Calculate estimated target based on VMAF requirements
+    if target_vmaf >= 95.0:
+        compression_ratio = 0.9  # 90% of original
+    elif target_vmaf >= 90.0:
+        compression_ratio = 0.5  # 50% of original  
+    elif target_vmaf >= 85.0:
+        compression_ratio = 0.35 # 35% of original  
+    else:
+        compression_ratio = 0.25 # 25% of original
+    
+    target_center = int(source_bitrate_kbps * compression_ratio)
+    
+    # Start with tight bounds, expand progressively if needed
+    base_width = 0.15  # Start with ±15% of target
+    expansion_multiplier = 1.8 ** expand_factor  # Expand by 1.8x each time
+    current_width = base_width * expansion_multiplier
+    
+    search_range = int(target_center * current_width)
+    
+    min_bitrate = max(300, target_center - search_range)  
+    max_bitrate = min(20000, target_center + search_range)  
+    
+    if expand_factor == 0:
+        print(f"[VBR-BOUNDS] Starting tight range: {min_bitrate}-{max_bitrate}kbps (center: {target_center}kbps, ±{current_width*100:.0f}%)")
+    else:
+        print(f"[VBR-BOUNDS] Expanded range #{expand_factor}: {min_bitrate}-{max_bitrate}kbps (±{current_width*100:.0f}%)")
+    
+    return min_bitrate, max_bitrate
+
+def optimize_encoder_settings_vbr(infile: Path, encoder: str, encoder_type: str, 
+                                  target_vmaf: float, vmaf_tolerance: float,
+                                  clip_positions: list[int], clip_duration: int, 
+                                  max_trials: int = 15) -> dict:
+    """
+    Find optimal VBR settings using bisection search and coordinate descent.
+    
+    Returns dict with:
+    - success: bool
+    - bitrate: int (kbps) 
+    - preset: str
+    - bf: int
+    - refs: int
+    - vmaf_score: float
+    - filesize: int (bytes)
+    """
+    print(f"[VBR] Optimizing {infile.name} for VMAF {target_vmaf:.1f}±{vmaf_tolerance:.1f}")
+    
+    # Parameter search spaces
+    presets = ["fast", "medium", "slow"] if encoder_type == "hardware" else ["fast", "medium", "slow"]
+    bf_values = [2, 3, 4] if encoder_type == "hardware" else [3, 4, 6]  
+    refs_values = [2, 3, 4] if encoder_type == "hardware" else [3, 4, 6]
+    
+    best_result = None
+    lowest_bitrate = float('inf')
+    trials = 0
+    abandoned = False  # Flag to break out of all loops when file is hopeless
+    
+    # Coordinate descent over parameters
+    for preset in presets:
+        if abandoned:
+            break
+        for bf in bf_values:
+            if abandoned:
+                break
+            for refs in refs_values:
+                if trials >= max_trials or abandoned:
+                    break
+                    
+                print(f"[VBR] Trial {trials+1}/{max_trials}: {preset}, bf={bf}, refs={refs}")
+                
+                # Progressive bound expansion for this parameter combination
+                expand_factor = 0
+                max_expansions = 3
+                result = None
+                
+                while expand_factor <= max_expansions:
+                    # Calculate bounds with current expansion factor
+                    min_bitrate, max_bitrate = calculate_intelligent_vbr_bounds(
+                        infile, target_vmaf, expand_factor
+                    )
+                    
+                    # Bisection search on bitrate for this parameter combination
+                    result = _bisect_bitrate(
+                        infile, encoder, encoder_type, 
+                        target_vmaf, vmaf_tolerance, 
+                        clip_positions, clip_duration,
+                        min_bitrate, max_bitrate,
+                        preset, bf, refs,
+                        expand_factor
+                    )
+                    
+                    # If successful, break out of expansion loop
+                    if result and result['success']:
+                        break
+                    
+                    # If we hit bounds, try expanding
+                    if result and result.get('bounds_hit'):
+                        # Check if file was abandoned due to impossible quality target
+                        if result.get('abandoned'):
+                            print(f"[VBR-ABANDON] File cannot reach target quality - stopping all trials")
+                            abandoned = True
+                            break
+                        
+                        expand_factor += 1
+                        print(f"[VBR] Bounds hit, expanding search range...")
+                    else:
+                        # Some other failure, don't expand further
+                        break
+                
+                trials += 1
+                
+                if result and result['success']:
+                    if result['bitrate'] < lowest_bitrate:
+                        lowest_bitrate = result['bitrate']
+                        best_result = result.copy()
+                        print(f"[VBR] New best: {result['bitrate']}kbps, VMAF {result['vmaf_score']:.2f}")
+                
+                # Early termination if we find a very good result
+                if best_result and best_result['bitrate'] < 2000:  # Under 2Mbps
+                    print(f"[VBR] Early termination - excellent bitrate found")
+                    break
+    
+    if best_result:
+        print(f"[VBR] Optimal: {best_result['bitrate']}kbps, "
+              f"VMAF {best_result['vmaf_score']:.2f}, "
+              f"{best_result['preset']}, bf={best_result['bf']}, refs={best_result['refs']}")
+        return best_result
+    else:
+        print(f"[VBR] Failed to find suitable settings within {max_trials} trials")
+        return {'success': False}
+
+def _bisect_bitrate(infile: Path, encoder: str, encoder_type: str,
+                   target_vmaf: float, vmaf_tolerance: float,
+                   clip_positions: list[int], clip_duration: int,
+                   min_br: int, max_br: int,
+                   preset: str, bf: int, refs: int,
+                   expand_factor: int = 0,
+                   max_iterations: int = 8) -> dict:
+    """Top-down bisection search to find minimum bitrate meeting VMAF target."""
+    
+    low, high = min_br, max_br
+    best_result = None
+    original_bounds = (min_br, max_br)
+    bounds_hit = False
+    
+    # Start from upper bound and work downward to find minimum acceptable bitrate
+    for iteration in range(max_iterations):
+        # For first iteration, start at high bound; then use traditional bisection
+        if iteration == 0:
+            current_bitrate = high
+        else:
+            current_bitrate = (low + high) // 2
+            
+        print(f"    Bitrate {current_bitrate}kbps [{low}-{high}]")
+        
+        # Test this bitrate with current parameters
+        vmaf_score = _test_vbr_encoding(
+            infile, encoder, encoder_type, current_bitrate,
+            clip_positions, clip_duration, preset, bf, refs
+        )
+        
+        if vmaf_score is None:
+            print(f"    Encoding failed at {current_bitrate}kbps")
+            high = current_bitrate - 1
+            continue
+            
+        vmaf_diff = vmaf_score - target_vmaf
+        print(f"    VMAF: {vmaf_score:.2f} (target: {target_vmaf:.1f})")
+        
+        # For VBR optimization, we want minimum bitrate that MEETS the target
+        # Only accept solutions at or above (target - tolerance)
+        if vmaf_diff >= -vmaf_tolerance:
+            # Acceptable quality - this is a valid solution, try to go lower
+            best_result = {
+                'success': True,
+                'bitrate': current_bitrate,
+                'preset': preset,
+                'bf': bf,
+                'refs': refs,
+                'vmaf_score': vmaf_score,
+                'bounds_hit': False  # We found a solution
+            }
+            print(f"    ✓ Valid solution found, trying lower...")
+            high = current_bitrate - 1  # Try to find even lower bitrate
+            
+        elif vmaf_diff < -vmaf_tolerance:  # Quality too low - need higher bitrate
+            # Check if we're hitting upper bounds
+            if current_bitrate >= original_bounds[1] * 0.95:
+                print(f"    [BOUNDS] Hitting upper bound at {current_bitrate}kbps")
+                bounds_hit = True
+                
+                # Early abandonment: progressive thresholds based on how much we've expanded
+                # This saves time on files that clearly can't reach target quality
+                abandon_threshold = 15.0  # Default for first bounds hit
+                if expand_factor > 0:  # We've already tried expanding bounds
+                    # Get more aggressive with each expansion
+                    # expand_factor 1: 12 points, expand_factor 2: 9 points, expand_factor 3: 6 points
+                    abandon_threshold = max(6.0, 15.0 - (expand_factor * 3.0))
+                
+                if vmaf_diff < -abandon_threshold:
+                    print(f"    [ABANDON] VMAF {vmaf_score:.2f} is {abs(vmaf_diff):.1f} points below target")
+                    print(f"    [ABANDON] Threshold: {abandon_threshold:.1f} points - file likely cannot reach target quality")
+                    return {
+                        'success': False,
+                        'bounds_hit': True,
+                        'abandoned': True,
+                        'vmaf_gap': abs(vmaf_diff),
+                        'abandon_threshold': abandon_threshold
+                    }
+                
+            low = current_bitrate + 1  # Increase minimum - this will lower the bound for next iteration
+        else:  # Quality too high (above target + tolerance) - can reduce bitrate further
+            high = current_bitrate - 1  # Reduce maximum
+            
+        if low > high:
+            break
+    
+    # Return result with bounds info
+    if best_result:
+        return best_result
+    else:
+        return {
+            'success': False,
+            'bounds_hit': bounds_hit
+        }
+
+def _test_vbr_encoding(infile: Path, encoder: str, encoder_type: str, bitrate_kbps: int,
+                      clip_positions: list[int], clip_duration: int,
+                      preset: str, bf: int, refs: int) -> float | None:
+    """Test VBR encoding at specific settings and return VMAF score."""
+    
+    # Use VMAfEvaluator for centralized VBR evaluation
+    evaluator = VMAfEvaluator(debug=DEBUG, temp_files=TEMP_FILES, baseline_vmaf=BASELINE_VMAF)
+    
+    # Create VBR encoder command builder
+    def vbr_encode_cmd_builder(clip_ref, clip_enc, enc, enc_type, bitrate_val, preserve_hdr):
+        return build_vbr_encode_cmd(
+            clip_ref, clip_enc, enc, enc_type,
+            bitrate_val, preset, bf, refs,
+            use_advanced_features=True, preserve_hdr_metadata=preserve_hdr
+        )
+    
+    # Convert int positions to float for VMAfEvaluator
+    float_positions = [float(pos) for pos in clip_positions]
+    
+    average_vmaf = evaluator.test_vbr_settings(
+        infile, encoder, encoder_type, bitrate_kbps,
+        preset, bf, refs, float_positions, float(clip_duration),
+        vbr_encode_cmd_builder
+    )
+    
+    return average_vmaf
+
+def get_vbr_clip_positions(duration_seconds: int, num_clips: int = 2) -> list[int]:
+    """Get clip start positions for VBR testing."""
+    if duration_seconds < 60:
+        return [10]  # Single clip for short files
+    
+    # For longer files, sample from different parts
+    positions = []
+    segment_size = duration_seconds // (num_clips + 1)
+    
+    for i in range(1, num_clips + 1):
+        pos = i * segment_size
+        positions.append(max(30, min(pos, duration_seconds - 60)))  # Ensure valid range
+        
+    return positions
 
 def encode_with_progress(infile: Path, outfile: Path, encoder: str, encoder_type: str, qp: int, preserve_hdr_metadata: bool = True) -> bool:
     dur = get_duration_sec(infile)
@@ -657,6 +941,225 @@ class TranscodeJob:
     vmaf_score: Optional[float] = None
     completed: bool = False
 
+@dataclass
+class StagedFile:
+    """Represents a file staged for processing"""
+    original_path: Path
+    staged_path: Path
+    size_bytes: int
+    transfer_future: Optional[concurrent.futures.Future] = None
+    ready: bool = False
+
+class AsyncFileStager:
+    """
+    Async file transfer queue that maintains a buffer of ready-to-process files.
+    Pre-stages files from network/slow drives to local temp storage for faster processing.
+    """
+    
+    def __init__(self, buffer_size: int = 3, temp_dir: Optional[Path] = None):
+        self.buffer_size = buffer_size
+        self.temp_dir = temp_dir or Path.cwd() / "temp_transcode"
+        self.staged_files: queue.Queue[StagedFile] = queue.Queue()
+        self.pending_transfers: List[StagedFile] = []
+        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="FileStager")
+        self.active = True
+        self._lock = threading.Lock()
+        
+        # Create temp directory
+        self.temp_dir.mkdir(exist_ok=True)
+        print(f"[STAGING] Temp directory: {self.temp_dir}")
+        
+        # Register cleanup
+        atexit.register(self.cleanup)
+    
+    def _copy_file_with_progress(self, src: Path, dst: Path, size_bytes: Optional[int] = None) -> bool:
+        """Copy file with progress tracking using multiple optimized methods"""
+        try:
+            # Use cached size if provided, otherwise get it (but avoid repeated calls)
+            if size_bytes is None:
+                size_bytes = src.stat().st_size
+            
+            print(f"[STAGING] Transferring {src.name} ({format_size(size_bytes)})...")
+            
+            # Method 1: Try PowerShell native copy (often fastest for Windows network drives)
+            if os.name == 'nt':
+                try:
+                    cmd = [
+                        "powershell", "-Command",
+                        f"Copy-Item -Path '{src}' -Destination '{dst}' -Force"
+                    ]
+                    
+                    if DEBUG:
+                        print(f"[STAGING-CMD] {' '.join(cmd)}")
+                    
+                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+                    
+                    if result.returncode == 0 and dst.exists() and dst.stat().st_size > 0:
+                        print(f"[STAGING] ✓ Ready: {src.name} (PowerShell copy)")
+                        return True
+                    else:
+                        if DEBUG:
+                            print(f"[STAGING] PowerShell copy failed (code {result.returncode}): {result.stderr}")
+                except Exception as e:
+                    if DEBUG:
+                        print(f"[STAGING] PowerShell copy exception: {e}")
+            
+            # Method 2: Try FFmpeg copy (you mentioned it works at 500 Mbps)
+            try:
+                cmd = [
+                    "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                    "-i", str(src),
+                    "-c", "copy",  # Stream copy (no re-encoding)
+                    "-avoid_negative_ts", "make_zero",
+                    str(dst)
+                ]
+                
+                if DEBUG:
+                    print(f"[STAGING-CMD] {' '.join(cmd)}")
+                
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+                
+                if result.returncode == 0 and dst.exists() and dst.stat().st_size > 0:
+                    print(f"[STAGING] ✓ Ready: {src.name} (FFmpeg copy)")
+                    return True
+                else:
+                    if DEBUG:
+                        print(f"[STAGING] FFmpeg copy failed (code {result.returncode}): {result.stderr}")
+            except Exception as e:
+                if DEBUG:
+                    print(f"[STAGING] FFmpeg copy exception: {e}")
+            
+            # Method 3: Try optimized robocopy with maximum performance flags
+            if os.name == 'nt':
+                try:
+                    cmd = [
+                        "robocopy", 
+                        str(src.parent), str(dst.parent), src.name,
+                        "/J",          # Unbuffered I/O for large files
+                        "/MT:32",      # Maximum multi-threading (32 threads)
+                        "/R:1", "/W:1", # Minimal retries
+                        "/NFL", "/NDL", "/NJH", "/NJS", "/NC", "/NS"  # No logging
+                    ]
+                    
+                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+                    if result.returncode in [0, 1]:  # 0=no copy needed, 1=files copied
+                        print(f"[STAGING] ✓ Ready: {src.name} (robocopy)")
+                        return True
+                except Exception as e:
+                    if DEBUG:
+                        print(f"[STAGING] Robocopy exception: {e}")
+            
+            print(f"[STAGING] ✗ All transfer methods failed: {src.name}")
+            return False
+                
+        except Exception as e:
+            print(f"[STAGING] ✗ Transfer error for {src.name}: {e}")
+            return False
+    
+    def stage_file(self, file_path: Path) -> StagedFile:
+        """Queue a file for staging and return StagedFile object"""
+        staged_path = self.temp_dir / file_path.name
+        # Get size once and cache it to avoid repeated network access
+        size_bytes = file_path.stat().st_size
+        
+        staged_file = StagedFile(
+            original_path=file_path,
+            staged_path=staged_path,
+            size_bytes=size_bytes
+        )
+        
+        # Submit transfer task with cached size to avoid repeated network access
+        future = self.executor.submit(self._copy_file_with_progress, file_path, staged_path, size_bytes)
+        staged_file.transfer_future = future
+        
+        with self._lock:
+            self.pending_transfers.append(staged_file)
+        
+        return staged_file
+    
+    def get_ready_file(self, timeout: float = 300) -> Optional[StagedFile]:
+        """Get next ready file, blocking until available or timeout"""
+        start_time = time.time()
+        
+        while time.time() - start_time < timeout and self.active:
+            # Check if any pending transfers completed
+            with self._lock:
+                completed = []
+                for staged_file in self.pending_transfers[:]:
+                    if staged_file.transfer_future and staged_file.transfer_future.done():
+                        try:
+                            success = staged_file.transfer_future.result()
+                            if success:
+                                staged_file.ready = True
+                                self.staged_files.put(staged_file)
+                                print(f"[STAGING] Buffer: {self.staged_files.qsize()}/{self.buffer_size} files ready")
+                            completed.append(staged_file)
+                        except Exception as e:
+                            print(f"[STAGING] Transfer failed: {e}")
+                            completed.append(staged_file)
+                
+                # Remove completed transfers
+                for staged_file in completed:
+                    self.pending_transfers.remove(staged_file)
+            
+            # Try to get a ready file
+            try:
+                return self.staged_files.get_nowait()
+            except queue.Empty:
+                time.sleep(0.5)  # Brief wait before checking again
+        
+        return None
+    
+    def cleanup_staged_file(self, staged_file: StagedFile):
+        """Clean up a staged file after processing"""
+        try:
+            if staged_file.staged_path.exists():
+                staged_file.staged_path.unlink()
+                print(f"[STAGING] Cleaned up {staged_file.staged_path.name}")
+        except Exception as e:
+            print(f"[STAGING] Cleanup error: {e}")
+    
+    def maintain_buffer(self, file_queue: List[Path]):
+        """Maintain buffer of staged files from remaining queue"""
+        with self._lock:
+            total_pending = len(self.pending_transfers)
+            ready_count = self.staged_files.qsize()
+            
+            # Calculate how many more transfers we should start
+            slots_needed = self.buffer_size - (total_pending + ready_count)
+            
+            if slots_needed > 0 and file_queue:
+                files_to_stage = file_queue[:slots_needed]
+                for file_path in files_to_stage:
+                    self.stage_file(file_path)
+                    file_queue.remove(file_path)
+                    
+                print(f"[STAGING] Queued {len(files_to_stage)} more files for transfer")
+    
+    def cleanup(self):
+        """Clean up temp directory and executor"""
+        self.active = False
+        
+        # Wait for pending transfers
+        with self._lock:
+            for staged_file in self.pending_transfers:
+                if staged_file.transfer_future:
+                    try:
+                        staged_file.transfer_future.result(timeout=10)
+                    except:
+                        pass
+        
+        # Clean up temp directory
+        if self.temp_dir.exists():
+            try:
+                shutil.rmtree(self.temp_dir)
+                print(f"[STAGING] Cleaned up temp directory: {self.temp_dir}")
+            except Exception as e:
+                print(f"[STAGING] Cleanup warning: {e}")
+        
+        # Shutdown executor
+        self.executor.shutdown(wait=True)
+
 class ParallelTranscoder:
     """Parallel transcoder that pipelines encoding (GPU) and VMAF verification (CPU)"""
     
@@ -942,170 +1445,19 @@ class ParallelTranscoder:
 
 def test_qp_on_sample(file: Path, qp: int, encoder: str, encoder_type: str, sample_duration: int = 60, vmaf_threads: int = 8, preserve_hdr_metadata: bool = True, use_clip_as_sample: bool = False) -> tuple[float | None, int, int]:
     """Test a QP on a sample clip and return (VMAF score, encoded sample size, original sample size)"""
+    # Use VMAfEvaluator for centralized evaluation logic
+    evaluator = VMAfEvaluator(debug=DEBUG, temp_files=TEMP_FILES, baseline_vmaf=BASELINE_VMAF)
     
-    if use_clip_as_sample:
-        # File is already a clip, use it directly as the sample
-        sample_clip = file
-        skip_cleanup = True  # Don't delete the clip - it's managed by the caller
-    else:
-        # Create sample clip first (60 seconds from middle)
-        duration = get_duration_sec(file)
-        start_time = max(0, (duration - sample_duration) / 2) if duration > sample_duration else 0
-        sample_clip = file.with_name(f"{file.stem}.sample_clip{file.suffix}")
-        TEMP_FILES.add(str(sample_clip))
-        skip_cleanup = False
+    # Create encoder command builder function
+    def encode_cmd_builder(sample_clip, encoded_sample, enc, enc_type, qp_val, preserve_hdr):
+        return build_encode_cmd(sample_clip, encoded_sample, enc, enc_type, qp_val, preserve_hdr_metadata=preserve_hdr)
     
-    encoded_sample = file.with_name(f"{file.stem}.qp{qp}_sample{file.suffix}")
-    if not use_clip_as_sample:
-        TEMP_FILES.add(str(encoded_sample))
-
-    try:
-        if not use_clip_as_sample:
-            # Extract sample clip
-            extract_cmd = [
-                "ffmpeg", "-hide_banner", "-y",
-                "-loglevel", "error" if not DEBUG else "info",
-                "-ss", str(start_time),
-                "-i", str(file),
-                "-t", str(sample_duration),
-                "-c", "copy",
-                str(sample_clip)
-            ]
-            
-            if DEBUG:
-                print("[SAMPLE-EXTRACT] " + " ".join(shlex.quote(c) for c in extract_cmd))
-            result = subprocess.run(extract_cmd, capture_output=True, text=True)
-            if result.returncode != 0:
-                if DEBUG:
-                    print("[DEBUG] sample extract stderr:\n" + result.stderr)
-                return None, 0, 0
-                
-        # Encode sample at target QP
-        encode_cmd = build_encode_cmd(sample_clip, encoded_sample, encoder, encoder_type, qp, preserve_hdr_metadata=preserve_hdr_metadata)
-        # Remove progress args for sample encoding
-        if "-progress" in encode_cmd:
-            idx = encode_cmd.index("-progress")
-            encode_cmd = encode_cmd[:idx] + encode_cmd[idx+2:]
-        if "-nostats" in encode_cmd:
-            encode_cmd.remove("-nostats")
-        
-        # Suppress ffmpeg noise unless debugging
-        if not DEBUG and "-loglevel" not in encode_cmd:
-            encode_cmd.insert(2, "-loglevel")
-            encode_cmd.insert(3, "error")
-            
-        if DEBUG:
-            print("[SAMPLE-ENCODE] " + " ".join(shlex.quote(c) for c in encode_cmd))
-        else:
-            # Provide feedback during encoding (on new line to avoid progress bar conflicts)
-            print(f"    -> Encoding QP{qp}...", end="", flush=True)
-        
-        result = subprocess.run(encode_cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            if not DEBUG:
-                print(" FAILED")
-            
-            # Check for hardware encoder specific issues
-            if encoder_type == "hardware" and qp < 20:
-                print(f"[WARN] Hardware encoder {encoder} failed at QP{qp}. Consider using --min-qp 20 or higher.")
-            
-            print(f"[WARN] Encoding failed for {sample_clip.name} at QP{qp}: return code {result.returncode}")
-            
-            # Enhanced error diagnosis
-            if "No such file or directory" in result.stderr:
-                print(f"[DEBUG] Input file check: {sample_clip} exists = {sample_clip.exists()}")
-                if sample_clip.exists():
-                    print(f"[DEBUG] Input file size: {sample_clip.stat().st_size} bytes")
-                print(f"[DEBUG] Output path: {encoded_sample}")
-                print(f"[DEBUG] Working directory: {Path.cwd()}")
-            
-            if DEBUG:
-                print("[DEBUG] sample encode stderr:\n" + result.stderr)
-            elif result.stderr:
-                # Show last error line even in non-debug mode
-                error_lines = result.stderr.strip().split('\n')
-                if error_lines:
-                    print(f"[ERROR] {error_lines[-1]}")
-            return None, 0, 0
-            
-        if not encoded_sample.exists():
-            if not DEBUG:
-                print(" FAILED (no output)")
-            print(f"[WARN] Encoding produced no output file: {encoded_sample}")
-            return None, 0, 0
-        
-        if not DEBUG:
-            print(" OK", end="", flush=True)
-
-        # Compute baseline (self) VMAF once per file using sample clip to avoid full-file cost
-        key = str(file) if not use_clip_as_sample else str(sample_clip)
-        if key not in BASELINE_VMAF and sample_clip.exists():
-            base_score = compute_vmaf_score(sample_clip, sample_clip, n_threads=vmaf_threads)
-            if base_score is not None:
-                BASELINE_VMAF[key] = base_score
-        
-        # Compute VMAF encoded vs original sample
-        if not DEBUG:
-            print(", VMAF...", end="", flush=True)
-        
-        # Verify both files exist before VMAF computation
-        if not sample_clip.exists():
-            if not DEBUG:
-                print(" FAILED (missing reference)")
-            print(f"[WARN] Reference clip missing for VMAF: {sample_clip}")
-            return None, 0, 0
-            
-        if not encoded_sample.exists():
-            if not DEBUG:
-                print(" FAILED (missing encoded)")
-            print(f"[WARN] Encoded sample missing for VMAF: {encoded_sample}")
-            return None, 0, 0
-        
-        # Check file sizes to ensure they're not empty/corrupted
-        ref_size = sample_clip.stat().st_size
-        enc_size = encoded_sample.stat().st_size
-        if ref_size == 0:
-            if not DEBUG:
-                print(" FAILED (empty reference)")
-            print(f"[WARN] Reference clip is empty: {sample_clip}")
-            return None, 0, 0
-        if enc_size == 0:
-            if not DEBUG:
-                print(" FAILED (empty encoded)")
-            print(f"[WARN] Encoded sample is empty: {encoded_sample}")
-            return None, 0, 0
-        
-        vmaf_score = compute_vmaf_score(sample_clip, encoded_sample, n_threads=vmaf_threads)
-        
-        if not DEBUG:
-            if vmaf_score is not None:
-                print(f" {vmaf_score:.1f}")
-            else:
-                print(" FAILED")
-        
-        encoded_size = encoded_sample.stat().st_size
-        sample_orig_size = sample_clip.stat().st_size if sample_clip.exists() else 0
-        return vmaf_score, encoded_size, sample_orig_size
-
-    finally:
-        if not DEBUG:  # keep for inspection when debugging
-            try:
-                if not skip_cleanup and sample_clip.exists():
-                    sample_clip.unlink()
-                    TEMP_FILES.discard(str(sample_clip))
-                if encoded_sample.exists():
-                    encoded_sample.unlink()
-                    if not use_clip_as_sample:
-                        TEMP_FILES.discard(str(encoded_sample))
-            except:
-                pass
-            for tmp_file in [sample_clip, encoded_sample]:
-                if tmp_file.exists():
-                    try: 
-                        tmp_file.unlink()
-                        TEMP_FILES.discard(str(tmp_file))
-                    except: 
-                        pass
+    result = evaluator.test_qp_on_sample(
+        file, qp, encoder, encoder_type, sample_duration, vmaf_threads,
+        preserve_hdr_metadata, use_clip_as_sample, encode_cmd_builder
+    )
+    
+    return result.vmaf_score, result.encoded_size, result.reference_size
 
 def find_optimal_qp(files: list[Path], encoder: str, encoder_type: str, 
                    candidate_qps: list[int] = None, 
@@ -1393,15 +1745,26 @@ def gradient_descent_qp_search(file: Path, encoder: str, encoder_type: str,
         
         return clips
     
-    def evaluate_qp_on_clips(clips: List[Path], qp: int) -> dict | None:
-        """Test a QP on multiple clips and return aggregated results."""
+    def evaluate_qp_on_clips(clips: List[Path], qp: int, qp_cache: dict = None) -> dict | None:
+        """Test a QP on multiple clips and return aggregated results with early failure detection."""
+        if qp_cache is None:
+            qp_cache = {}
+        
+        # Check memory cache first to avoid redundant encoding within same run
+        if qp in qp_cache:
+            print(f"[MEMORY-CACHE] Using cached result for QP{qp}")
+            return qp_cache[qp].copy()
+        
         vmaf_scores: list[float] = []
         total_clip_original_size = 0
         total_encoded_size = 0
         worst_vmaf_drop = 0.0
         
+        # Early failure threshold: if VMAF is this far below target, likely hopeless
+        early_fail_threshold = vmaf_target - 20.0
+        
         # Progress bar per QP evaluation (quiet if only one clip)
-        pbar = tqdm(total=len(clips), desc=f"QP{qp} clips", position=1, leave=False) if len(clips) > 1 else None
+        pbar = tqdm(total=len(clips), desc=f"QP{qp} clips", position=2, leave=False) if len(clips) > 1 else None
         try:
             for idx, clip in enumerate(clips):
                 if pbar:
@@ -1434,6 +1797,18 @@ def gradient_descent_qp_search(file: Path, encoder: str, encoder_type: str,
                     baseline_score = 100.0
                     drop = baseline_score - vmaf_score
                     worst_vmaf_drop = max(worst_vmaf_drop, drop)
+                    
+                    # Early failure detection: if first clip shows hopeless case, skip remaining clips
+                    if idx == 0 and vmaf_score < early_fail_threshold and qp <= (min_qp_limit + 2):
+                        if pbar:
+                            pbar.set_description(f"QP{qp} clips - Early fail: VMAF {vmaf_score:.1f} << {vmaf_target:.1f}")
+                        else:
+                            print(f"  [EARLY-FAIL] VMAF {vmaf_score:.1f} too far below target {vmaf_target:.1f} at low QP{qp}")
+                        
+                        # Skip remaining clips for this hopeless QP
+                        if pbar:
+                            pbar.update(len(clips) - idx - 1)  # Fast-forward progress bar
+                        break
                 
                 if pbar: pbar.update(1)
         finally:
@@ -1454,7 +1829,7 @@ def gradient_descent_qp_search(file: Path, encoder: str, encoder_type: str,
         else:
             size_pct = 100
             
-        return {
+        result = {
             'mean_vmaf': mean_vmaf,
             'min_vmaf': min_vmaf,
             'size_pct': size_pct,
@@ -1462,6 +1837,12 @@ def gradient_descent_qp_search(file: Path, encoder: str, encoder_type: str,
             'samples_used': len(vmaf_scores),
             'worst_drop': worst_vmaf_drop
         }
+        
+        # Store result in memory cache for current run only (no disk cache files)
+        if qp_cache is not None:
+            qp_cache[qp] = result.copy()
+        
+        return result
     
     print(f"[GRADIENT-DESCENT] Starting 2D gradient descent QP optimization for {file.name}")
     
@@ -1483,17 +1864,62 @@ def gradient_descent_qp_search(file: Path, encoder: str, encoder_type: str,
     
     print(f"[INFO] Extracted {len(clips)} clips for gradient descent optimization")
     
-    # Initialize gradient descent parameters
+    # Fast initial assessment: test lowest QP on just one clip to detect hopeless cases early
+    print(f"[GRADIENT-DESCENT] Fast initial assessment at QP{min_qp_limit}...")
+    first_clip = clips[0]
+    initial_vmaf, _, _ = test_qp_on_sample(
+        first_clip, min_qp_limit, encoder, encoder_type, 
+        sample_duration=sample_duration, vmaf_threads=vmaf_threads, 
+        preserve_hdr_metadata=preserve_hdr_metadata, use_clip_as_sample=True
+    )
+    
+    if initial_vmaf is not None and initial_vmaf < (vmaf_target - 25.0):
+        print(f"[GRADIENT-DESCENT] Early termination: VMAF {initial_vmaf:.1f} at lowest QP{min_qp_limit} is {vmaf_target - initial_vmaf:.1f} points below target")
+        print(f"[GRADIENT-DESCENT] {file.name}: QP {min_qp_limit} (early fail - content cannot reach target quality)")
+        # Clean up clips
+        if not DEBUG:
+            for clip in clips:
+                try:
+                    if clip.exists():
+                        clip.unlink()
+                    TEMP_FILES.discard(str(clip))
+                except:
+                    pass
+        return min_qp_limit, None
+    else:
+        print(f"[GRADIENT-DESCENT] Initial assessment passed: VMAF {initial_vmaf:.1f} at QP{min_qp_limit}")
+    
+    # Initialize gradient descent parameters with adaptive settings
     qp = float(initial_qp)  # Allow fractional QP for gradient computation
     velocity_qp = 0.0  # Momentum term
     
-    # Store evaluation history
+    # Store evaluation history and cache QP results to avoid re-encoding
     history: List[tuple[int, float, float, float]] = []  # (qp_int, vmaf, size_pct, loss)
+    qp_cache = {}  # Cache results to avoid re-encoding same QP
     best_qp = initial_qp
     best_result = None
     
+    # Pre-populate cache with initial assessment if we did QP at min_qp_limit
+    if initial_vmaf is not None and initial_qp == min_qp_limit:
+        # We already tested min_qp_limit, so add this to cache to avoid re-encoding
+        quick_result = {
+            'mean_vmaf': initial_vmaf,
+            'min_vmaf': initial_vmaf,
+            'size_pct': 95.0,  # rough estimate
+            'passes_quality': initial_vmaf >= vmaf_target and initial_vmaf >= vmaf_min_threshold,
+            'samples_used': 1,
+            'worst_drop': 100.0 - initial_vmaf
+        }
+        qp_cache[min_qp_limit] = quick_result
+    
+    # Adaptive parameters for faster convergence
+    adaptive_learning_rate = learning_rate * 2.0  # Start with higher learning rate
+    consecutive_oscillations = 0
+    last_qp_direction = 0
+    stagnation_count = 0
+    
     print(f"[GRADIENT-DESCENT] Target VMAF: {vmaf_target:.1f}, Min VMAF: {vmaf_min_threshold:.1f}")
-    print(f"[GRADIENT-DESCENT] Learning rate: {learning_rate:.3f}, Momentum: {momentum:.2f}, Tolerance: {tolerance:.1f}")
+    print(f"[GRADIENT-DESCENT] Adaptive learning rate: {adaptive_learning_rate:.3f}, Momentum: {momentum:.2f}, Tolerance: {tolerance:.1f}")
     
     try:
         with tqdm(total=max_iterations, desc=f"GD Search {file.name[:35]}", position=0, leave=False) as pbar:
@@ -1503,8 +1929,8 @@ def gradient_descent_qp_search(file: Path, encoder: str, encoder_type: str,
                 
                 pbar.set_description(f"GD Search {file.name[:30]} - QP{qp_int} (iter {iteration+1})")
                 
-                # Evaluate current QP
-                result = evaluate_qp_on_clips(clips, qp_int)
+                # Evaluate current QP using cache
+                result = evaluate_qp_on_clips(clips, qp_int, qp_cache)
                 if result is None:
                     print(f"[WARN] Failed to evaluate QP {qp_int}")
                     break
@@ -1529,13 +1955,32 @@ def gradient_descent_qp_search(file: Path, encoder: str, encoder_type: str,
                 
                 pbar.set_description(f"GD Search {file.name[:25]} - QP{qp_int}: VMAF {vmaf:.1f}, Loss {loss:.2f}")
                 
-                # Check convergence
+                # Fast convergence check
                 if vmaf_error <= tolerance:
                     print(f"[GRADIENT-DESCENT] Converged: VMAF {vmaf:.2f} within tolerance {tolerance}")
                     break
                 
-                # Compute gradients using finite differences
+                # Detect oscillation patterns for early termination
+                if len(history) >= 4:
+                    last_qps = [h[0] for h in history[-4:]]
+                    # Check for oscillation between two QP values
+                    if len(set(last_qps)) == 2 and last_qps[-1] == last_qps[-3]:
+                        # Pick the better one and stop
+                        recent_results = [(h[0], h[3]) for h in history[-4:]]  # (qp, loss)
+                        best_recent = min(recent_results, key=lambda x: x[1])
+                        print(f"[GRADIENT-DESCENT] Oscillation detected, stopping at QP{best_recent[0]}")
+                        # Update to the best oscillating QP
+                        for h in reversed(history):
+                            if h[0] == best_recent[0]:
+                                best_qp = h[0]
+                                best_result = {'mean_vmaf': h[1], 'size_pct': h[2], 'passes_quality': True}
+                                best_result['loss'] = h[3]
+                                break
+                        break
+                
+                # Adaptive gradient computation
                 gradient_qp = 0.0
+                current_direction = 0
                 
                 if len(history) >= 2:
                     # Use previous point for gradient estimation
@@ -1543,29 +1988,43 @@ def gradient_descent_qp_search(file: Path, encoder: str, encoder_type: str,
                     curr_qp, curr_vmaf, curr_size, curr_loss = history[-1]
                     
                     if curr_qp != prev_qp:
-                        # dLoss/dQP
+                        # dLoss/dQP - more aggressive gradient
                         gradient_qp = (curr_loss - prev_loss) / (curr_qp - prev_qp)
+                        current_direction = 1 if (curr_qp - prev_qp) > 0 else -1
+                        
+                        # Detect direction changes for oscillation tracking
+                        if last_qp_direction != 0 and current_direction != last_qp_direction:
+                            consecutive_oscillations += 1
+                        else:
+                            consecutive_oscillations = 0
+                        last_qp_direction = current_direction
                 else:
-                    # First iteration: use sign of VMAF error to determine direction
+                    # First iteration: more aggressive initial step
                     if vmaf < vmaf_target:
-                        # Need higher quality -> DECREASE QP (negative direction)
-                        gradient_qp = -1.0  # Negative gradient means decrease QP
+                        # Need higher quality -> DECREASE QP aggressively
+                        gradient_qp = -2.0  # More aggressive initial step
                     else:
                         # Quality is good -> try higher QP for more compression
-                        gradient_qp = 1.0  # Positive gradient means increase QP
+                        gradient_qp = 1.5   # More aggressive step
                 
-                # Adaptive learning rate based on progress
-                if len(history) >= 3:
+                # Dynamic learning rate adjustment
+                if consecutive_oscillations >= 2:
+                    # Reduce learning rate when oscillating
+                    adaptive_learning_rate *= 0.5
+                    consecutive_oscillations = 0
+                    print(f"[GRADIENT-DESCENT] Reducing learning rate to {adaptive_learning_rate:.3f} due to oscillation")
+                elif len(history) >= 3:
+                    # Adjust based on loss progression
                     recent_losses = [h[3] for h in history[-3:]]
-                    if recent_losses[-1] > recent_losses[-2]:  # Loss increased
-                        learning_rate *= 0.8  # Reduce learning rate
-                    elif recent_losses[-1] < recent_losses[-2]:  # Loss decreased
-                        learning_rate *= 1.05  # Slightly increase learning rate
+                    if recent_losses[-1] < recent_losses[-2]:  # Improving
+                        adaptive_learning_rate *= 1.1  # Increase learning rate
+                    elif recent_losses[-1] > recent_losses[-2] * 1.1:  # Getting worse
+                        adaptive_learning_rate *= 0.7  # Decrease learning rate
                 
                 # Update velocity with momentum
-                velocity_qp = momentum * velocity_qp - learning_rate * gradient_qp
+                velocity_qp = momentum * velocity_qp - adaptive_learning_rate * gradient_qp
                 
-                # Update QP
+                # Update QP with larger steps for faster convergence
                 qp += velocity_qp
                 
                 # Clamp to bounds
@@ -1573,23 +2032,27 @@ def gradient_descent_qp_search(file: Path, encoder: str, encoder_type: str,
                 
                 if DEBUG:
                     print(f"[GD-DEBUG] Iter {iteration+1}: QP {qp_int} -> {qp:.2f}, VMAF {vmaf:.2f}, "
-                          f"Loss {loss:.3f}, Grad {gradient_qp:.3f}, LR {learning_rate:.4f}")
+                          f"Loss {loss:.3f}, Grad {gradient_qp:.3f}, LR {adaptive_learning_rate:.4f}")
                 
                 pbar.update(1)
                 
-                # Early stopping if QP doesn't change significantly or has converged
+                # Early stopping for stagnation
                 if len(history) >= 3:
                     last_qps = [h[0] for h in history[-3:]]
-                    last_losses = [h[3] for h in history[-3:]]
+                    last_vmaf_errors = [abs(h[1] - vmaf_target) for h in history[-3:]]
                     
                     # Check if QP is stuck at same value
                     if len(set(last_qps)) == 1:
-                        print(f"[GRADIENT-DESCENT] Early stop: QP converged at {qp_int}")
-                        break
+                        stagnation_count += 1
+                        if stagnation_count >= 2:
+                            print(f"[GRADIENT-DESCENT] Early stop: QP converged at {qp_int}")
+                            break
+                    else:
+                        stagnation_count = 0
                     
-                    # Check if loss has plateaued
-                    if len(set([round(l, 2) for l in last_losses])) == 1:
-                        print(f"[GRADIENT-DESCENT] Early stop: Loss plateaued at {loss:.2f}")
+                    # Check if VMAF error is barely improving
+                    if len(last_vmaf_errors) >= 3 and all(abs(last_vmaf_errors[i] - last_vmaf_errors[i+1]) < 0.1 for i in range(2)):
+                        print(f"[GRADIENT-DESCENT] Early stop: VMAF error improvement minimal")
                         break
                 
                 # Ensure QP makes meaningful progress by enforcing minimum step size
@@ -1873,6 +2336,43 @@ def adaptive_qp_search_per_file(file: Path, encoder: str, encoder_type: str,
         return initial_qp
     
     print(f"[INFO] Extracted {len(clips)} clips for QP optimization")
+    
+    # Fast initial assessment: test lowest QP on just one clip to detect hopeless cases early
+    print(f"[ADAPTIVE] Fast initial assessment at QP{min_qp_limit}...")
+    first_clip = clips[0]
+    initial_vmaf, _, _ = test_qp_on_sample(
+        first_clip, min_qp_limit, encoder, encoder_type, 
+        sample_duration=sample_duration, vmaf_threads=vmaf_threads, 
+        preserve_hdr_metadata=preserve_hdr_metadata, use_clip_as_sample=True
+    )
+    
+    if initial_vmaf is not None and initial_vmaf < (vmaf_target - 25.0):
+        print(f"[ADAPTIVE] Early termination: VMAF {initial_vmaf:.1f} at lowest QP{min_qp_limit} is {vmaf_target - initial_vmaf:.1f} points below target")
+        # Create minimal result for early failure
+        early_fail_result = {
+            'mean_vmaf': initial_vmaf,
+            'min_vmaf': initial_vmaf,
+            'size_pct': 95.0,  # rough estimate
+            'passes_quality': False,
+            'inefficient': False,
+            'early_fail': True,
+            'samples_used': 1,
+            'worst_drop': vmaf_target - initial_vmaf
+        }
+        print(f"[RESULT] {file.name}: QP {min_qp_limit} mean {initial_vmaf:.2f} (loss {vmaf_target - initial_vmaf:.2f}), min {initial_vmaf:.2f}, worst drop {vmaf_target - initial_vmaf:.2f}, size 95.0% (samples 1)")
+        
+        # Clean up clips
+        if not DEBUG:
+            for clip in clips:
+                try:
+                    if clip.exists():
+                        clip.unlink()
+                    TEMP_FILES.discard(str(clip))
+                except:
+                    pass
+        return min_qp_limit, early_fail_result
+    else:
+        print(f"[ADAPTIVE] Initial assessment passed: VMAF {initial_vmaf:.1f} at QP{min_qp_limit}")
     
     # Run adaptive QP search using the clips (similar logic to the existing function)
     qp_results: dict[int, dict] = {}
@@ -2279,6 +2779,8 @@ def main():
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("--path", default=".", help="Folder to scan (supports UNC)")
+    ap.add_argument("--mode", choices=["qp", "vbr"], default="qp", 
+                    help="Optimization mode: 'qp' for QP search (default), 'vbr' for VBR bitrate search")
     ap.add_argument("--exts", default=",".join(e.strip(".") for e in EXTS),
                     help="Comma-separated extensions (e.g. mkv,mp4,mov,ts)")
     ap.add_argument("--samples", type=int, default=SAMPLE_COUNT_DEFAULT,
@@ -2293,6 +2795,15 @@ def main():
                     help="Target mean VMAF score")
     ap.add_argument("--vmaf-min", type=float, default=VMAF_MIN_THRESHOLD,
                     help="Minimum acceptable VMAF score for any clip")
+    # VBR mode parameters
+    ap.add_argument("--vmaf-tol", type=float, default=1,
+                    help="VMAF tolerance for VBR mode (default 0.5)")
+    ap.add_argument("--vbr-clips", type=int, default=2,
+                    help="Number of clips for VBR VMAF testing (default 2)")
+    ap.add_argument("--vbr-clip-duration", type=int, default=30,
+                    help="Duration in seconds for each VBR test clip (default 25)")
+    ap.add_argument("--vbr-max-trials", type=int, default=6,
+                    help="Maximum trials for VBR parameter optimization (default 6)")
     # Default sample duration now 600s (10 minutes) for more stable VMAF statistics
     ap.add_argument("--sample-duration", type=int, default=600,
                     help="Seconds per sample clip for QP testing (default 600)")
@@ -2329,9 +2840,12 @@ def main():
     ap.add_argument("--gradient-descent", action="store_true", help="Use 2D gradient descent optimization instead of traditional binary search for QP optimization")
     ap.add_argument("--debug", action="store_true", help="Verbose debugging: keep samples, show ffmpeg & VMAF commands and stderr")
     ap.add_argument("--cpu-monitor", action="store_true", help="Monitor CPU usage during VMAF operations")
+    ap.add_argument("--cpu", action="store_true", help="Force CPU/software encoding (libx265) instead of hardware acceleration")
     ap.add_argument("--auto-yes", action="store_true", help="Automatically answer 'yes' to confirmation prompts")
     ap.add_argument("--no-parallel", action="store_true", help="Disable parallel processing (use sequential encoding + VMAF verification)")
     ap.add_argument("--non-destructive", action="store_true", help="Save transcoded files to 'Transcoded' subdirectory instead of replacing originals")
+    ap.add_argument("--staging", action="store_true", help="Enable async file staging for network drive optimization (maintains buffer of 3 files in temp_transcode/)")
+    ap.add_argument("--limit", type=int, help="Limit processing to the first N files (useful for testing)")
     args = ap.parse_args()
 
     # Inform user about automatic defaults if not explicitly overridden
@@ -2357,52 +2871,330 @@ def main():
         print(f"[ERR] path not found: {base}")
         sys.exit(1)
 
-    # Early scavenging of stale artifacts
-    _startup_scavenge(base)
-
     # Detect encoder
-    encoder, encoder_type = detect_hevc_encoder()
-    print(f"[INFO] Using encoder: {encoder} ({encoder_type})")
+    if args.cpu:
+        cpu_count = os.cpu_count() or 8
+        encoder, encoder_type = "libx265", "software"
+        print(f"[INFO] Using encoder: {encoder} ({encoder_type}) - forced by --cpu flag")
+        print(f"[CPU] MAXIMUM optimization for {cpu_count} cores:")
+        print(f"      • {cpu_count} threads (100% utilization)")  
+        print(f"      • {min(12, max(3, cpu_count // 2))} frame-threads (aggressive pipeline)")
+        print(f"      • {min(6, max(2, cpu_count // 4))} pools (NUMA-aware distribution)")
+        print(f"      • {min(8, max(2, cpu_count // 4))} lookahead-threads (analysis parallelism)")
+        print(f"      • Advanced: pmode, pme, b-adapt=2, subme=7 (CPU intensive)")
+    else:
+        encoder, encoder_type = detect_hevc_encoder()
+        print(f"[INFO] Using encoder: {encoder} ({encoder_type})")
 
-    patterns = [f"*.{ext.strip().lower()}" for ext in args.exts.split(",") if ext.strip()]
-    files: list[Path] = []
-    for pat in patterns:
-        files.extend(base.rglob(pat))
-    files = sorted(set(files))
-    # Filter out macOS resource fork / hidden files (e.g., ._Filename.mkv) and generic hidden dot-files
-    pre_hidden_count = len(files)
-    files = [f for f in files if not f.name.startswith('._') and not f.name.startswith('.')]
-    hidden_skipped = pre_hidden_count - len(files)
-    if hidden_skipped:
-        print(f"[INFO] skipped {hidden_skipped} hidden/resource-fork file(s) (. / ._ prefix)")
-    # Exclude previously generated sample clips / qp sample encodes from consideration
-    files = [f for f in files if ".sample_clip" not in f.stem and "_sample" not in f.stem]
-    if not files:
-        print(f"[INFO] no matching files in {base}")
-        return
-
-    # Filter out files with efficient codecs
-    print(f"[INFO] found {len(files)} video files, checking codecs...")
-    files_to_transcode = []
-    skipped_files = []
+    # Use FileManager for centralized file discovery and processing
+    file_manager = FileManager(debug=DEBUG, temp_files=TEMP_FILES)
     
-    for f in files:
-        codec = get_video_codec(f)
-        if should_skip_codec(codec):
-            skipped_files.append((f, codec))
-            print(f"  SKIP: {f.name} (already {codec})")
+    # Perform startup cleanup
+    removed_count = file_manager.startup_scavenge(base)
+    if removed_count > 0:
+        print(f"[CLEANUP] Removed {removed_count} stale temp file(s) from previous run.")
+    
+    # Discover and filter files - handle direct file path or directory
+    try:
+        if base.is_file():
+            # Direct file path provided
+            if base.suffix.lower() in [ext.lower() for ext in EXTS]:
+                print(f"[INFO] Processing single file: {base.name}")
+                files = [base]
+                # For non-destructive mode, use the file's parent directory
+                output_base = base.parent
+            else:
+                print(f"[ERR] Unsupported file type: {base.suffix}")
+                sys.exit(1)
         else:
-            files_to_transcode.append(f)
-            print(f"  QUEUE: {f.name} ({codec or 'unknown'})")
-    
-    files = files_to_transcode
-    if skipped_files:
-        print(f"[INFO] skipped {len(skipped_files)} files with efficient codecs")
-    
-    if not files:
-        print("[INFO] no files need transcoding (all already use efficient codecs)")
-        return
+            # Directory path - use FileManager for discovery
+            discovery_result = file_manager.process_files_with_codec_filtering(base, args.exts)
+            files = discovery_result.files_to_transcode
+            output_base = base
+            
+            if not files:
+                if discovery_result.skipped_files:
+                    print("[INFO] no files need transcoding (all already use efficient codecs)")
+                else:
+                    print(f"[INFO] no matching files in {base}")
+                return
+        
+        # Apply limit if specified
+        if args.limit and len(files) > args.limit:
+            original_count = len(files)
+            files = files[:args.limit]
+            print(f"[INFO] Limited to first {args.limit} files (out of {original_count} total)")
+            
+    except ValueError as e:
+        print(f"[ERR] {e}")
+        sys.exit(1)
 
+    # --- VBR mode handling ---
+    if args.mode == "vbr":
+        print(f"[VBR] Starting VBR optimization mode (target VMAF: {args.vmaf_target}±{args.vmaf_tol})")
+        
+        # Initialize async file stager if enabled
+        stager = None
+        remaining_files = None
+        if args.staging:
+            # Use current working directory for temp staging, not the target path
+            local_temp_dir = Path.cwd() / "temp_transcode"
+            stager = AsyncFileStager(buffer_size=3, temp_dir=local_temp_dir)
+            remaining_files = files.copy()  # Working queue of files to process
+            
+            # Stage first file and wait for completion before starting processing
+            if remaining_files:
+                first_file = remaining_files.pop(0)
+                print(f"[STAGING] Prioritizing first file: {first_file.name}")
+                first_staged = stager.stage_file(first_file)
+                
+                # Wait for first file to complete transfer
+                if first_staged.transfer_future:
+                    print(f"[STAGING] Waiting for first file to complete transfer...")
+                    first_staged.transfer_future.result()  # Block until complete
+                    first_staged.ready = True
+                    stager.staged_files.put(first_staged)
+                    print(f"[STAGING] ✓ First file ready: {first_file.name}")
+                
+                # Start staging remaining files for buffer (async - don't wait)
+                initial_staging_count = min(2, len(remaining_files))  # 2 more for 3 total
+                for _ in range(initial_staging_count):
+                    if remaining_files:
+                        file_to_stage = remaining_files.pop(0)
+                        stager.stage_file(file_to_stage)
+                
+                print(f"[STAGING] Started background staging of {initial_staging_count} additional files")
+                print(f"[STAGING] Starting VBR processing immediately with first file ready")
+            else:
+                print(f"[STAGING] No files to stage")
+        
+        vbr_results = {}
+        
+        if args.staging and stager:
+            # Staged processing mode
+            with tqdm(total=len(files), desc="VBR Optimization (Staged)", position=0) as vbr_progress:
+                processed_count = 0
+                
+                while processed_count < len(files):
+                    # Get next ready file from staging buffer
+                    staged_file = stager.get_ready_file(timeout=300)
+                    if not staged_file:
+                        print(f"[STAGING] Timeout waiting for file transfer")
+                        break
+                    
+                    # Use staged file for processing
+                    file = staged_file.original_path
+                    staged_path = staged_file.staged_path
+                    
+                    vbr_progress.set_description(f"VBR Optimization - {file.name[:40]}...")
+                    
+                    # Maintain buffer by staging next file
+                    if remaining_files:
+                        stager.maintain_buffer(remaining_files)
+                    
+                    # Get file duration and clip positions for VBR testing (use staged file)
+                    duration = get_duration_sec(staged_path)
+                    if duration is None:
+                        print(f"[VBR-SKIP] {file.name} - Cannot determine duration")
+                        stager.cleanup_staged_file(staged_file)
+                        processed_count += 1
+                        vbr_progress.update(1)
+                        continue
+                    
+                    # Auto-scale VBR clips based on file duration (same logic as QP mode)
+                    vbr_clips = args.vbr_clips
+                    vbr_clips_was_explicitly_set = '--vbr-clips' in sys.argv
+                    
+                    if duration > 0 and not vbr_clips_was_explicitly_set:
+                        auto_clips = max(3, min(vbr_clips * 2, int(duration / 1200)))  # 1200s = 20min
+                        if auto_clips != vbr_clips:
+                            print(f"[VBR-INFO] Auto-scaling clips from {vbr_clips} to {auto_clips} based on {duration/60:.1f}min duration")
+                            vbr_clips = auto_clips
+                        
+                    clip_positions = get_vbr_clip_positions(int(duration), vbr_clips)
+                    
+                    # Run VBR optimization on staged file (but store result with original file)
+                    result = optimize_encoder_settings_vbr(
+                        staged_path, encoder, encoder_type,
+                        target_vmaf=args.vmaf_target,
+                        vmaf_tolerance=args.vmaf_tol,
+                        clip_positions=clip_positions,
+                        clip_duration=args.vbr_clip_duration,
+                        max_trials=args.vbr_max_trials
+                    )
+                    
+                    if result['success']:
+                        vbr_results[file] = result  # Store with original file as key
+                        print(f"[VBR-SUCCESS] {file.name}: {result['bitrate']}kbps, "
+                              f"VMAF {result['vmaf_score']:.2f}, "
+                              f"{result['preset']}, bf={result['bf']}, refs={result['refs']}")
+                    else:
+                        if result.get('abandoned'):
+                            vmaf_gap = result.get('vmaf_gap', 0)
+                            print(f"[VBR-ABANDON] {file.name}: Target unreachable (VMAF gap: {vmaf_gap:.1f} points)")
+                        else:
+                            print(f"[VBR-FAILED] {file.name}: Could not find suitable VBR settings")
+                    
+                    # Clean up staged file after processing
+                    stager.cleanup_staged_file(staged_file)
+                    processed_count += 1
+                    vbr_progress.update(1)
+            
+            # Cleanup stager
+            stager.cleanup()
+        else:
+            # Standard processing mode (no staging)
+            with tqdm(total=len(files), desc="VBR Optimization", position=0) as vbr_progress:
+                for file in files:
+                    vbr_progress.set_description(f"VBR Optimization - {file.name[:40]}...")
+                    
+                    # Get file duration and clip positions for VBR testing
+                    duration = get_duration_sec(file)
+                    if duration is None:
+                        print(f"[VBR-SKIP] {file.name} - Cannot determine duration")
+                        vbr_progress.update(1)
+                        continue
+                    
+                    # Auto-scale VBR clips based on file duration (same logic as QP mode)
+                    vbr_clips = args.vbr_clips
+                    vbr_clips_was_explicitly_set = '--vbr-clips' in sys.argv
+                    
+                    if duration > 0 and not vbr_clips_was_explicitly_set:
+                        auto_clips = max(3, min(vbr_clips * 2, int(duration / 1200)))  # 1200s = 20min
+                        if auto_clips != vbr_clips:
+                            print(f"[VBR-INFO] Auto-scaling clips from {vbr_clips} to {auto_clips} based on {duration/60:.1f}min duration")
+                            vbr_clips = auto_clips
+                        
+                    clip_positions = get_vbr_clip_positions(int(duration), vbr_clips)
+                    
+                    # Run VBR optimization
+                    result = optimize_encoder_settings_vbr(
+                        file, encoder, encoder_type,
+                        target_vmaf=args.vmaf_target,
+                        vmaf_tolerance=args.vmaf_tol,
+                        clip_positions=clip_positions,
+                        clip_duration=args.vbr_clip_duration,
+                        max_trials=args.vbr_max_trials
+                    )
+                    
+                    if result['success']:
+                        vbr_results[file] = result
+                        print(f"[VBR-SUCCESS] {file.name}: {result['bitrate']}kbps, "
+                              f"VMAF {result['vmaf_score']:.2f}, "
+                              f"{result['preset']}, bf={result['bf']}, refs={result['refs']}")
+                    else:
+                        if result.get('abandoned'):
+                            vmaf_gap = result.get('vmaf_gap', 0)
+                            print(f"[VBR-ABANDON] {file.name}: Target unreachable (VMAF gap: {vmaf_gap:.1f} points)")
+                        else:
+                            print(f"[VBR-FAILED] {file.name}: Could not find suitable VBR settings")
+                        
+                    vbr_progress.update(1)
+        
+        # Print VBR results summary
+        if vbr_results:
+            print(f"\n[VBR] Optimization complete for {len(vbr_results)}/{len(files)} files:")
+            total_bitrate = sum(r['bitrate'] for r in vbr_results.values())
+            avg_bitrate = total_bitrate / len(vbr_results)
+            avg_vmaf = sum(r['vmaf_score'] for r in vbr_results.values()) / len(vbr_results)
+            
+            print(f"  Average bitrate: {avg_bitrate:.0f} kbps")
+            print(f"  Average VMAF: {avg_vmaf:.2f}")
+            
+            if not (args.dry_run or args.skip_transcode):
+                print(f"[VBR] Starting VBR transcoding with optimized settings...")
+                
+                # Create Transcoded directory if non-destructive mode
+                transcoded_dir = None
+                if args.non_destructive:
+                    transcoded_dir = get_next_transcoded_dir(output_base)
+                    transcoded_dir.mkdir(exist_ok=True)
+                    print(f"[INFO] Non-destructive mode: saving to {transcoded_dir}")
+                
+                success_count = 0
+                with tqdm(total=len(vbr_results), desc="VBR Transcoding", position=0) as overall:
+                    for file, result in vbr_results.items():
+                        print(f"[VBR-ENCODE] Transcoding {file.name} at {result['bitrate']}kbps (VMAF {result['vmaf_score']:.2f})")
+                        
+                        if args.non_destructive:
+                            # Non-destructive: save to Transcoded subdirectory
+                            final_output = transcoded_dir / file.name
+                            tmp = transcoded_dir / (file.stem + ".transcode" + file.suffix)
+                        else:
+                            # Destructive: replace original
+                            final_output = file
+                            tmp = file.with_name(file.stem + ".transcode" + file.suffix)
+                            bak = file.with_name(file.stem + ".bak" + file.suffix)
+
+                        if tmp.exists(): 
+                            try: tmp.unlink()
+                            except: pass
+                        
+                        # Use VBR-specific encoding with optimized settings
+                        ok = encode_vbr_with_progress(
+                            file, tmp, encoder, encoder_type,
+                            result['bitrate'], result['preset'], result['bf'], result['refs'],
+                            preserve_hdr_metadata=preserve_hdr
+                        )
+                        
+                        if ok and tmp.exists():
+                            # CRITICAL: Final VMAF validation on full transcoded file
+                            print(f"  [VERIFY] Running final VMAF check on full transcoded file...")
+                            final_vmaf = compute_vmaf_score(file, tmp, n_threads=args.vmaf_threads)
+                            
+                            if final_vmaf is not None:
+                                vmaf_diff = abs(final_vmaf - args.vmaf_target)
+                                within_tolerance = vmaf_diff <= args.vmaf_tol
+                                
+                                if within_tolerance:
+                                    print(f"  ✓ Final VMAF validation passed: {final_vmaf:.2f} (target: {args.vmaf_target}±{args.vmaf_tol})")
+                                    
+                                    # Quality validated - proceed with file placement
+                                    if args.non_destructive:
+                                        # Non-destructive: simply move temp to final location
+                                        if final_output.exists():
+                                            final_output.unlink()  # Remove existing transcoded version
+                                        shutil.move(str(tmp), str(final_output))
+                                        print(f"  ✓ Saved verified transcode to Transcoded/{file.name}")
+                                        success_count += 1
+                                    else:
+                                        # Destructive: atomic swap with backup
+                                        if bak.exists():
+                                            try: bak.unlink()
+                                            except: pass
+                                        shutil.move(str(file), str(bak))
+                                        shutil.move(str(tmp), str(file))
+                                        try: bak.unlink()
+                                        except: pass
+                                        print(f"  ✓ Verified and replaced {file.name}")
+                                        success_count += 1
+                                else:
+                                    print(f"  ✗ Final VMAF validation FAILED: {final_vmaf:.2f} (expected: {args.vmaf_target}±{args.vmaf_tol})")
+                                    print(f"    Difference: {vmaf_diff:.2f} > tolerance {args.vmaf_tol}")
+                                    print(f"    Discarding transcoded file and keeping original intact")
+                                    try:
+                                        tmp.unlink()  # Remove failed transcode
+                                    except:
+                                        pass
+                            else:
+                                print(f"  ✗ Final VMAF calculation failed - discarding transcode")
+                                try:
+                                    tmp.unlink()  # Remove unverifiable transcode
+                                except:
+                                    pass
+                        else:
+                            print(f"  ✗ Failed to transcode {file.name}")
+                            
+                        overall.update(1)
+                
+                print(f"[VBR] Transcoding complete: {success_count}/{len(vbr_results)} files successful.")
+            else:
+                print(f"[VBR] Dry run mode - skipping actual transcoding")
+        else:
+            print(f"[VBR] No files successfully optimized")
+            
+        return  # Exit after VBR mode
+    
     # --- QP optimization step ---
     if args.use_qp:
         # Use predetermined QP for all files
@@ -2521,7 +3313,7 @@ def main():
         # Create Transcoded directory if non-destructive mode
         transcoded_dir = None
         if args.non_destructive:
-            transcoded_dir = base / "Transcoded"
+            transcoded_dir = get_next_transcoded_dir(output_base)
             transcoded_dir.mkdir(exist_ok=True)
             print(f"[INFO] Non-destructive mode: saving to {transcoded_dir}")
         
@@ -2546,25 +3338,51 @@ def main():
                     
                 ok = encode_with_progress(f, tmp, encoder, encoder_type, file_qp, preserve_hdr_metadata=preserve_hdr)
                 if ok and tmp.exists():
-                    if args.non_destructive:
-                        # Non-destructive: simply move temp to final location
-                        if final_output.exists():
-                            final_output.unlink()  # Remove existing transcoded version
-                        shutil.move(str(tmp), str(final_output))
-                        print(f"  Saved transcoded version to Transcoded/{f.name}")
-                    else:
-                        # Destructive: atomic swap with backup
-                        if bak.exists():
-                            try: bak.unlink()
-                            except: pass
-                        shutil.move(str(f), str(bak))
-                        shutil.move(str(tmp), str(f))
-                        try: bak.unlink()
-                        except: pass
-                        print(f"  Overwrote {f.name}")
+                    # CRITICAL: Final VMAF validation on full transcoded file
+                    print(f"  [VERIFY] Running final VMAF check on full transcoded file...")
+                    final_vmaf = compute_vmaf_score(f, tmp, n_threads=args.vmaf_threads)
                     
-                    TEMP_FILES.discard(str(tmp))
-                    success_count += 1
+                    if final_vmaf is not None:
+                        within_target = final_vmaf >= args.vmaf_target
+                        within_min = final_vmaf >= args.vmaf_min
+                        
+                        if within_target and within_min:
+                            print(f"  ✓ Final VMAF validation passed: {final_vmaf:.2f} (target: ≥{args.vmaf_target}, min: ≥{args.vmaf_min})")
+                            
+                            # Quality validated - proceed with file placement
+                            if args.non_destructive:
+                                # Non-destructive: simply move temp to final location
+                                if final_output.exists():
+                                    final_output.unlink()  # Remove existing transcoded version
+                                shutil.move(str(tmp), str(final_output))
+                                print(f"  ✓ Saved verified transcode to Transcoded/{f.name}")
+                                success_count += 1
+                            else:
+                                # Destructive: atomic swap with backup
+                                if bak.exists():
+                                    try: bak.unlink()
+                                    except: pass
+                                shutil.move(str(f), str(bak))
+                                shutil.move(str(tmp), str(f))
+                                try: bak.unlink()
+                                except: pass
+                                print(f"  ✓ Verified and replaced {f.name}")
+                                success_count += 1
+                        else:
+                            print(f"  ✗ Final VMAF validation FAILED: {final_vmaf:.2f}")
+                            print(f"    Target: ≥{args.vmaf_target} {'✗ FAIL' if not within_target else '✓'}")
+                            print(f"    Minimum: ≥{args.vmaf_min} {'✗ FAIL' if not within_min else '✓'}")
+                            print(f"    Discarding transcoded file and keeping original intact")
+                            try:
+                                tmp.unlink()  # Remove failed transcode
+                            except:
+                                pass
+                    else:
+                        print(f"  ✗ Final VMAF calculation failed - discarding transcode")
+                        try:
+                            tmp.unlink()  # Remove unverifiable transcode
+                        except:
+                            pass
                 else:
                     if tmp.exists():
                         try: tmp.unlink()
