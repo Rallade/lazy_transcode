@@ -20,64 +20,29 @@ from .media_utils import get_duration_sec, compute_vmaf_score, ffprobe_field, ff
 def build_vbr_encode_cmd(infile: Path, outfile: Path, encoder: str, encoder_type: str, 
                         max_bitrate: int, avg_bitrate: int, preset: str = "medium", 
                         bf: int = 3, refs: int = 3, preserve_hdr_metadata: bool = True) -> List[str]:
-    """Build VBR encoding command with advanced encoder parameters."""
-    cmd = ["ffmpeg", "-hide_banner", "-y"]
+    """Build VBR encoding command with proper HDR detection using EncoderConfigBuilder."""
     
-    # Input
-    cmd.extend(["-i", str(infile)])
+    # Use the sophisticated EncoderConfigBuilder which has proper HDR detection
+    from .encoder_config import EncoderConfigBuilder
     
-    # Video encoding  
-    cmd.extend(["-c:v", encoder])
+    builder = EncoderConfigBuilder()
     
-    if encoder_type == "hardware":
-        if "nvenc" in encoder:
-            cmd.extend(["-preset", preset, "-rc", "vbr", "-maxrate", f"{max_bitrate}k",
-                       "-b:v", f"{avg_bitrate}k", "-bufsize", f"{max_bitrate * 2}k",
-                       "-bf", str(bf), "-refs", str(refs)])
-        elif "amf" in encoder:
-            cmd.extend(["-usage", "transcoding", "-rc", "vbr_peak", "-b:v", f"{avg_bitrate}k",
-                       "-maxrate", f"{max_bitrate}k", "-bufsize", f"{max_bitrate * 2}k", 
-                       "-bf", str(bf), "-refs", str(refs)])
-        elif "videotoolbox" in encoder:
-            cmd.extend(["-b:v", f"{avg_bitrate}k", "-maxrate", f"{max_bitrate}k",
-                       "-bufsize", f"{max_bitrate * 2}k"])
-        elif "qsv" in encoder:
-            cmd.extend(["-preset", preset, "-b:v", f"{avg_bitrate}k", 
-                       "-maxrate", f"{max_bitrate}k", "-bufsize", f"{max_bitrate * 2}k",
-                       "-bf", str(bf), "-refs", str(refs)])
-    else:
-        # Software encoder (x265) VBR with advanced parameters
-        cmd.extend(["-preset", preset, "-b:v", f"{avg_bitrate}k", 
-                   "-maxrate", f"{max_bitrate}k", "-bufsize", f"{max_bitrate * 2}k"])
-        
-        # x265 specific parameters including advanced options
-        x265_params = [
-            "rd=6",
-            f"bframes={bf}",
-            f"ref={refs}",
-            "me=3",  # umh motion estimation
-            "subme=7",  # high subpixel refinement
-            "merange=25",  # motion estimation range
-            "b-adapt=2",  # adaptive B-frame decision
-            "pmode",  # parallel mode decision
-            "pme"  # parallel motion estimation
-        ]
-        
-        if preserve_hdr_metadata:
-            x265_params.extend([
-                "colorprim=bt2020",
-                "transfer=smpte2084", 
-                "colormatrix=bt2020nc",
-                "master-display=G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1)",
-                "max-cll=1000,400"
-            ])
-        cmd.extend(["-x265-params", ":".join(x265_params)])
+    # Get video dimensions for proper encoding
+    try:
+        width = int(ffprobe_field(infile, "width") or "1920")
+        height = int(ffprobe_field(infile, "height") or "1080")
+    except (ValueError, TypeError):
+        width, height = 1920, 1080  # Fallback
     
-    # Audio and subtitle copy
-    cmd.extend(["-c:a", "copy", "-c:s", "copy"])
+    # Determine threading based on encoder type
+    threads = 4 if encoder_type == "hardware" else None  # Let x265 auto-decide for CPU
     
-    # Output
-    cmd.append(str(outfile))
+    # Use the sophisticated VBR command builder which properly handles HDR detection
+    cmd = builder.build_vbr_encode_cmd(
+        str(infile), str(outfile), encoder, preset, avg_bitrate,
+        bf, refs, width, height, threads=threads,
+        preserve_hdr=preserve_hdr_metadata, debug=DEBUG
+    )
     
     return cmd
 
