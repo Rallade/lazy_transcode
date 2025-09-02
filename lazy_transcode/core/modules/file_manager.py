@@ -17,6 +17,10 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Set, Tuple, Dict, Any
+from ...utils.logging import get_logger
+
+# Module logger
+logger = get_logger("file_manager")
 
 
 @dataclass
@@ -68,7 +72,7 @@ class FileManager:
         total_found = len(files)
         
         if self.debug:
-            print(f"[DEBUG] Found {total_found} files with patterns {patterns}")
+            logger.debug(f"Found {total_found} files with patterns {patterns}")
         
         # Filter hidden files and macOS resource forks
         pre_hidden_count = len(files)
@@ -79,7 +83,7 @@ class FileManager:
         files = [f for f in files if not self._is_sample_or_artifact(f)]
         
         if self.debug:
-            print(f"[DEBUG] After filtering hidden/sample files: {len(files)}")
+            logger.debug(f"After filtering hidden/sample files: {len(files)}")
         
         return FileDiscoveryResult(
             files_to_transcode=files,
@@ -200,7 +204,7 @@ class FileManager:
             return discovery_result
         
         # Check codecs and filter
-        print(f"[INFO] found {len(discovery_result.files_to_transcode)} video files, checking codecs...")
+        logger.discovery(f"Found {len(discovery_result.files_to_transcode)} video files")
         
         files_to_transcode, skipped_files = self.check_codec_and_filter(discovery_result.files_to_transcode)
         
@@ -296,7 +300,7 @@ class FileManager:
                         stale_file.unlink()
                         removed += 1
                         if self.debug:
-                            print(f"[CLEANUP] Removed stale: {stale_file.name}")
+                            logger.cleanup(f"Removed stale: {stale_file.name}")
                 except Exception as e:
                     if self.debug:
                         print(f"[DEBUG] Could not remove {stale_file}: {e}")

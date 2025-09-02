@@ -28,6 +28,10 @@ from .modules.media_utils import (
     get_duration_sec, get_video_codec, should_skip_codec, 
     compute_vmaf_score
 )
+from ..utils.logging import get_logger, set_debug_mode
+
+# Module logger
+logger = get_logger("transcode_main")
 from .modules.vbr_optimizer import (
     calculate_intelligent_vbr_bounds, optimize_encoder_settings_vbr,
     get_vbr_clip_positions, build_vbr_encode_cmd
@@ -53,23 +57,23 @@ def process_vbr_mode(args, encoder: str, encoder_type: str, files: List[Path]) -
     """Process files using VBR optimization mode."""
     vbr_results = {}
     
-    print(f"[VBR-MODE] Processing {len(files)} files")
-    print(f"[VBR-MODE] Target VMAF: {args.vmaf_target:.1f} ±{args.vmaf_tol:.1f}")
-    print(f"[VBR-MODE] Encoder: {encoder} ({encoder_type})")
+    logger.vbr(f"Processing {len(files)} files")
+    logger.vbr(f"Target VMAF: {args.vmaf_target:.1f} ±{args.vmaf_tol:.1f}")
+    logger.vbr(f"Encoder: {encoder} ({encoder_type})")
     
     for file in files:
-        print(f"\n[VBR] Processing: {file.name}")
+        logger.vbr(f"\nProcessing: {file.name}")
         
         # Skip if wrong codec
         current_codec = get_video_codec(file)
         if should_skip_codec(current_codec):
-            print(f"[VBR-SKIP] {file.name}: Already HEVC/AV1")
+            logger.debug(f"SKIP {file.name}: Already HEVC/AV1")
             continue
         
         # Get duration and calculate clips
         duration = get_duration_sec(file)
         if duration <= 0:
-            print(f"[VBR-SKIP] {file.name}: Could not determine duration")
+            logger.debug(f"SKIP {file.name}: Could not determine duration")
             continue
             
         # Auto-scale clips based on video length
@@ -78,7 +82,7 @@ def process_vbr_mode(args, encoder: str, encoder_type: str, files: List[Path]) -
             # Auto-scale clips: 1 clip per 30 minutes, min 2, max 6
             auto_clips = max(2, min(6, int(duration / 1800)))  # 1800s = 30min
             if auto_clips != vbr_clips:
-                print(f"[VBR-INFO] Auto-scaling clips from {vbr_clips} to {auto_clips} based on {duration/60:.1f}min duration")
+                logger.debug(f"Auto-scaling clips from {vbr_clips} to {auto_clips} based on {duration/60:.1f}min duration")
                 vbr_clips = auto_clips
                 
         clip_positions = get_vbr_clip_positions(duration, vbr_clips)
@@ -95,10 +99,10 @@ def process_vbr_mode(args, encoder: str, encoder_type: str, files: List[Path]) -
         
         if result.get('success', False):
             vbr_results[file] = result
-            print(f"[VBR-SUCCESS] {file.name}: {result['bitrate']}kbps, "
-                  f"VMAF {result['vmaf_score']:.2f}")
+            logger.vbr(f"SUCCESS {file.name}: {result['bitrate']}kbps, "
+                      f"VMAF {result['vmaf_score']:.2f}")
         else:
-            print(f"[VBR-FAILED] {file.name}: Could not find suitable VBR settings")
+            logger.vbr(f"FAILED {file.name}: Could not find suitable VBR settings")
     
     return vbr_results
 
@@ -108,7 +112,7 @@ def process_qp_mode(args, encoder: str, encoder_type: str, files: List[Path]) ->
     
     # Check if we need to find optimal QP
     if args.qp == 0:
-        print(f"[QP-AUTO] Finding optimal QP for {args.vmaf_target:.1f} VMAF")
+        logger.debug(f"Finding optimal QP for {args.vmaf_target:.1f} VMAF")
         optimal_qp = find_optimal_qp(
             files, encoder, encoder_type,
             vmaf_target=args.vmaf_target,
@@ -117,13 +121,13 @@ def process_qp_mode(args, encoder: str, encoder_type: str, files: List[Path]) ->
         )
         
         if optimal_qp > 0:
-            print(f"[QP-AUTO] Found optimal QP: {optimal_qp}")
+            logger.debug(f"Found optimal QP: {optimal_qp}")
         else:
-            print(f"[QP-AUTO] Failed to find optimal QP, using fallback: 23")
+            logger.debug(f"Failed to find optimal QP, using fallback: 23")
             optimal_qp = 23
     else:
         optimal_qp = args.qp
-        print(f"[QP-FIXED] Using specified QP: {optimal_qp}")
+        logger.debug(f"Using specified QP: {optimal_qp}")
     
     # Process files with QP
     qp_map = {}
@@ -131,7 +135,7 @@ def process_qp_mode(args, encoder: str, encoder_type: str, files: List[Path]) ->
         # Skip if wrong codec
         current_codec = get_video_codec(file)
         if should_skip_codec(current_codec):
-            print(f"[QP-SKIP] {file.name}: Already HEVC/AV1")
+            logger.debug(f"SKIP {file.name}: Already HEVC/AV1")
             continue
         
         qp_map[file] = optimal_qp
@@ -156,8 +160,8 @@ def process_auto_mode(args, encoder: str, encoder_type: str, files: List[Path]) 
         else:
             qp_files.append(file)
     
-    print(f"[AUTO-MODE] VBR optimization: {len(vbr_files)} files")
-    print(f"[AUTO-MODE] QP optimization: {len(qp_files)} files")
+    logger.debug(f"VBR optimization: {len(vbr_files)} files")
+    logger.debug(f"QP optimization: {len(qp_files)} files")
     
     # Process VBR files
     vbr_results = {}
@@ -205,29 +209,39 @@ def main():
     # Encoder settings
     parser.add_argument("--encoder", choices=["cpu", "nvenc", "amf", "qsv", "videotoolbox"],
                        help="Force specific encoder (default: auto-detect)")
+    parser.add_argument("--cpu", action="store_true", 
+                       help="Force CPU/software encoding (libx265) instead of hardware acceleration")
     parser.add_argument("--preserve-hdr", action="store_true", default=True,
                        help="Preserve HDR metadata (default: enabled)")
     
     # Processing options
     parser.add_argument("--limit", type=int, help="Limit number of files to process")
     parser.add_argument("--dry-run", action="store_true", help="Show what would be processed without encoding")
+    parser.add_argument("--non-destructive", action="store_true", 
+                       help="Save transcoded files to 'Transcoded' subdirectory instead of replacing originals")
     parser.add_argument("--parallel", type=int, default=1, help="Number of parallel encoding jobs")
     parser.add_argument("--verify", action="store_true", help="Verify quality after encoding")
     parser.add_argument("--debug", action="store_true", help="Enable debug output")
+    parser.add_argument("--no-timestamps", action="store_true", help="Disable timestamps in log output")
     
     args = parser.parse_args()
     
     # Set debug mode
     if args.debug:
-        import logging
-        logging.basicConfig(level=logging.DEBUG)
+        from ..utils.logging import set_debug_mode
+        set_debug_mode(True)
         global DEBUG
         DEBUG = True
+        
+    # Set timestamp mode
+    if args.no_timestamps:
+        from ..utils.logging import set_timestamps_enabled
+        set_timestamps_enabled(False)
     
     # Setup input/output
     input_path = Path(args.input).resolve()
     if not input_path.exists():
-        print(f"[ERROR] Input path does not exist: {input_path}")
+        logger.debug(f"ERROR: Input path does not exist: {input_path}")
         return 1
     
     # Discover files
@@ -242,17 +256,21 @@ def main():
     # Apply limit if specified
     if args.limit:
         files = files[:args.limit]
-        print(f"[LIMIT] Processing first {len(files)} files")
+        logger.debug(f"Processing first {len(files)} files")
     
     if not files:
-        print("[NO-FILES] No video files found to process")
+        logger.debug("No video files found to process")
         return 0
     
-    print(f"[DISCOVERY] Found {len(files)} video files")
+    logger.discovery(f"Found {len(files)} video files")
     
     # Detect encoder
     encoder, encoder_type = detect_best_encoder()
-    if args.encoder:
+    if args.cpu:
+        # Force CPU encoding
+        encoder, encoder_type = 'libx265', 'software'
+        logger.debug(f"Forced CPU encoding via --cpu flag")
+    elif args.encoder:
         # Override with user's choice
         if args.encoder == 'cpu':
             encoder, encoder_type = 'libx265', 'software'
@@ -262,16 +280,17 @@ def main():
             encoder, encoder_type = 'hevc_amf', 'hardware'
         elif args.encoder == 'intel':
             encoder, encoder_type = 'hevc_qsv', 'hardware'
-    print(f"[ENCODER] Selected: {encoder} ({encoder_type})")
+    logger.debug(f"Selected: {encoder} ({encoder_type})")
     
     # Setup output directory
     if args.output:
         output_dir = Path(args.output).resolve()
     else:
+        # Default behavior: create numbered Transcoded_X directory (non-destructive)
         output_dir = get_next_transcoded_dir(input_path.parent if input_path.is_file() else input_path)
     
     output_dir.mkdir(parents=True, exist_ok=True)
-    print(f"[OUTPUT] Directory: {output_dir}")
+    logger.debug(f"Output directory: {output_dir}")
     
     # Dry run check
     if args.dry_run:

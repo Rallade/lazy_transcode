@@ -17,6 +17,10 @@ import subprocess
 import threading
 import time
 from pathlib import Path
+
+from ...utils.logging import get_logger
+
+logger = get_logger("system_utils")
 try:
     import psutil
     PSUTIL_AVAILABLE = True
@@ -34,7 +38,7 @@ def _cleanup():
         try:
             if os.path.exists(f):
                 os.remove(f)
-                print(f"[CLEANUP] removed {f}")
+                logger.cleanup(f"removed {f}")
         except Exception:
             pass
         finally:
@@ -49,7 +53,7 @@ for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGABRT):
 
 def run_logged(cmd: list[str], **popen_kwargs) -> subprocess.CompletedProcess:
     """Run command with logging"""
-    print("[CMD] " + " ".join(shlex.quote(c) for c in cmd))
+    logger.debug("Command: " + " ".join(shlex.quote(c) for c in cmd))
     return subprocess.run(cmd, **popen_kwargs)
 
 
@@ -91,17 +95,17 @@ def start_cpu_monitor(duration_seconds: int = 0) -> tuple[threading.Thread, thre
     def monitor_cpu():
         try:
             if PSUTIL_AVAILABLE:
-                print(f"[CPU-MONITOR] Starting CPU monitoring (cores: {psutil.cpu_count()})")
+                logger.debug(f"Starting CPU monitoring (cores: {psutil.cpu_count()})")
                 start_time = time.time()
                 while not stop_event.is_set():
                     cpu_percent = psutil.cpu_percent(interval=1)
                     cpu_per_core = psutil.cpu_percent(percpu=True, interval=None)
                     active_cores = sum(1 for c in cpu_per_core if c > 10)
-                    print(f"[CPU] {cpu_percent:5.1f}% total, {active_cores}/16 cores active (>10%)")
+                    logger.debug(f"CPU: {cpu_percent:5.1f}% total, {active_cores}/16 cores active (>10%)")
                     if duration_seconds > 0 and time.time() - start_time > duration_seconds:
                         break
             else:
-                print("[CPU-MONITOR] psutil not available, using basic Windows monitoring")
+                logger.debug("psutil not available, using basic Windows monitoring")
                 start_time = time.time()
                 while not stop_event.is_set():
                     try:
@@ -111,18 +115,18 @@ def start_cpu_monitor(duration_seconds: int = 0) -> tuple[threading.Thread, thre
                             capture_output=True, text=True, timeout=5)
                         if result.returncode == 0:
                             cpu_usage = float(result.stdout.strip())
-                            print(f"[CPU] {cpu_usage:5.1f}% total")
+                            logger.debug(f"CPU: {cpu_usage:5.1f}% total")
                         time.sleep(2)
                     except Exception:
                         time.sleep(3)
                         if DEBUG:
-                            print("[CPU] Basic monitoring active")
+                            logger.debug("Basic monitoring active")
                     
                     if duration_seconds > 0 and time.time() - start_time > duration_seconds:
                         break
         except Exception as e:
             if DEBUG:
-                print(f"[CPU-MONITOR] Error: {e}")
+                logger.debug(f"CPU monitoring error: {e}")
     
     thread = threading.Thread(target=monitor_cpu, daemon=True)
     thread.start()

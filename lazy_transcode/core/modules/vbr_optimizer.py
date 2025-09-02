@@ -15,6 +15,10 @@ from typing import List, Tuple, Optional, Dict
 
 from .system_utils import TEMP_FILES, DEBUG
 from .media_utils import get_duration_sec, compute_vmaf_score, ffprobe_field, ffprobe_field
+from ...utils.logging import get_logger
+
+# Module logger
+logger = get_logger("vbr_optimizer")
 
 
 def build_vbr_encode_cmd(infile: Path, outfile: Path, encoder: str, encoder_type: str, 
@@ -72,7 +76,7 @@ def calculate_intelligent_vbr_bounds(infile: Path, target_vmaf: float, expand_fa
     except (subprocess.TimeoutExpired, subprocess.SubprocessError, ValueError):
         source_bitrate_kbps = 8000  # Conservative fallback
     
-    print(f"[VBR-BOUNDS] Source bitrate: {source_bitrate_kbps}kbps")
+    logger.vbr_bounds(f"Source bitrate: {source_bitrate_kbps}kbps")
     
     # Calculate estimated target based on VMAF requirements
     if target_vmaf >= 95.0:
@@ -119,7 +123,7 @@ def calculate_intelligent_vbr_bounds(infile: Path, target_vmaf: float, expand_fa
         reduction = expand_factor * 75  # Reduce by 75kbps per expansion
         adjusted_min = max(100, base_min - reduction)  # Never go below 100kbps
         if expand_factor > 0:
-            print(f"[VBR-BOUNDS] Lowering minimum by {reduction}kbps due to expansion (attempt #{expand_factor})")
+            logger.vbr_bounds(f"Lowering minimum by {reduction}kbps due to expansion (attempt #{expand_factor})")
     else:
         adjusted_min = base_min
     
@@ -127,9 +131,9 @@ def calculate_intelligent_vbr_bounds(infile: Path, target_vmaf: float, expand_fa
     max_bitrate = min(20000, target_center + search_range)  
     
     if expand_factor == 0:
-        print(f"[VBR-BOUNDS] Starting tight range: {min_bitrate}-{max_bitrate}kbps (center: {target_center}kbps, ±{current_width*100:.0f}%)")
+        logger.vbr_bounds(f"Starting tight range: {min_bitrate}-{max_bitrate}kbps (center: {target_center}kbps, ±{current_width*100:.0f}%)")
     else:
-        print(f"[VBR-BOUNDS] Expanded range #{expand_factor}: {min_bitrate}-{max_bitrate}kbps (±{current_width*100:.0f}%)")
+        logger.vbr_bounds(f"Expanded range #{expand_factor}: {min_bitrate}-{max_bitrate}kbps (±{current_width*100:.0f}%)")
     
     return min_bitrate, max_bitrate
 
@@ -174,12 +178,12 @@ def optimize_encoder_settings_vbr(infile: Path, encoder: str, encoder_type: str,
     - vmaf_score: float
     - filesize: int (bytes)
     """
-    print(f"[VBR] Optimizing {infile.name} for VMAF {target_vmaf:.1f}±{vmaf_tolerance:.1f}")
+    logger.vbr(f"Optimizing {infile.name} for VMAF {target_vmaf:.1f}±{vmaf_tolerance:.1f}")
     
     # Get source file info for better reporting
     try:
         source_size_gb = infile.stat().st_size / (1024**3)
-        print(f"[VBR] Source file: {source_size_gb:.2f}GB")
+        logger.vbr(f"Source file: {source_size_gb:.2f}GB")
     except:
         source_size_gb = 0
     
@@ -231,7 +235,7 @@ def optimize_encoder_settings_vbr(infile: Path, encoder: str, encoder_type: str,
         source_bitrate_kbps = 8000
     
     # Phase 1: Test slow → medium → fast preset progression  
-    print(f"[VBR] Phase 1: Testing preset progression (slow → medium → fast)")
+    logger.vbr(f"Phase 1: Testing preset progression (slow → medium → fast)")
     tested_combinations = set()  # Track tested combinations to avoid duplicates
     
     for preset in presets:
@@ -548,7 +552,7 @@ def _bisect_bitrate(infile: Path, encoder: str, encoder_type: str,
             # Check cache first
             if cache_key in test_cache:
                 cached_result = test_cache[cache_key]
-                print(f"[VBR-CACHE] {bitrate_kbps}kbps: Using cached VMAF {cached_result:.2f}")
+                logger.vbr_cache(f"{bitrate_kbps}kbps: Using cached VMAF {cached_result:.2f}")
                 return cached_result
             
             vmaf_scores = []
@@ -593,13 +597,13 @@ def _bisect_bitrate(infile: Path, encoder: str, encoder_type: str,
             
             # Handle case where no clips could be processed
             if avg_vmaf is None or len(vmaf_scores) == 0:
-                print(f"[VBR-ERROR] {bitrate_kbps}kbps: No valid VMAF scores from {len(clips)} clips")
+                logger.vbr_error(f"{bitrate_kbps}kbps: No valid VMAF scores from {len(clips)} clips")
                 return None
             
             # Store result in cache
             test_cache[cache_key] = avg_vmaf
             
-            print(f"[VBR-TEST] {bitrate_kbps}kbps: Average VMAF {avg_vmaf:.2f} from {len(vmaf_scores)} clips")
+            logger.vbr_test(f"{bitrate_kbps}kbps: Average VMAF {avg_vmaf:.2f} from {len(vmaf_scores)} clips")
             return avg_vmaf
         
         # Bisection search
@@ -607,9 +611,10 @@ def _bisect_bitrate(infile: Path, encoder: str, encoder_type: str,
         current_max = max_br
         best_bitrate_val = current_max
         best_vmaf = 0.0
+        highest_vmaf_achieved = 0.0  # Track highest VMAF regardless of target achievement
         bounds_hit = False
         
-        print(f"[VBR-BISECT] Starting bisection: {current_min}-{current_max}kbps")
+        logger.vbr_bisect(f"Starting bisection: {current_min}-{current_max}kbps")
         
         # Calculate source file info for space savings projections
         try:
@@ -638,7 +643,7 @@ def _bisect_bitrate(infile: Path, encoder: str, encoder_type: str,
             
             # Check for VMAF calculation failure
             if vmaf_result is None or vmaf_result <= 0.0:
-                print(f"[VBR-ERROR] VMAF calculation failed at {test_bitrate_val}kbps - aborting trial")
+                logger.vbr_error(f"VMAF calculation failed at {test_bitrate_val}kbps - aborting trial")
                 return {
                     'success': False,
                     'bitrate': test_bitrate_val,
@@ -649,6 +654,10 @@ def _bisect_bitrate(infile: Path, encoder: str, encoder_type: str,
                     'filesize': 0,
                     'error': 'vmaf_calculation_failed'
                 }
+            
+            # Always track the highest VMAF achieved for better reporting
+            if vmaf_result > highest_vmaf_achieved:
+                highest_vmaf_achieved = vmaf_result
             
             # SMART EARLY DETECTION: 
             # For slow→medium→fast progression, detect when preset is insufficient early
@@ -696,7 +705,7 @@ def _bisect_bitrate(infile: Path, encoder: str, encoder_type: str,
                             'preset': preset,
                             'bf': bf,
                             'refs': refs,
-                            'vmaf_score': best_vmaf,
+                            'vmaf_score': highest_vmaf_achieved if best_vmaf == 0.0 else best_vmaf,
                             'filesize': 0,
                             'bounds_hit': True,
                             'abandoned': True,
@@ -712,7 +721,8 @@ def _bisect_bitrate(infile: Path, encoder: str, encoder_type: str,
             
             # Check convergence - exit early if search range is very narrow
             if current_max - current_min < 100:  # 100kbps convergence
-                print(f"[VBR-BISECT] Converged to {best_bitrate_val}kbps, VMAF {best_vmaf:.2f}")
+                display_vmaf = highest_vmaf_achieved if best_vmaf == 0.0 else best_vmaf
+                print(f"[VBR-BISECT] Converged to {best_bitrate_val}kbps, VMAF {display_vmaf:.2f}")
                 break
             
             # Smart early exit: if we're very close to target and search range is narrow
@@ -722,7 +732,8 @@ def _bisect_bitrate(infile: Path, encoder: str, encoder_type: str,
                 break
         
         # Check if target was achieved within tolerance
-        success = abs(best_vmaf - target_vmaf) <= vmaf_tolerance
+        display_vmaf = highest_vmaf_achieved if best_vmaf == 0.0 else best_vmaf
+        success = abs(display_vmaf - target_vmaf) <= vmaf_tolerance
         
         # Estimate final file size
         if success:
@@ -737,7 +748,7 @@ def _bisect_bitrate(infile: Path, encoder: str, encoder_type: str,
             'preset': preset,
             'bf': bf,
             'refs': refs,
-            'vmaf_score': best_vmaf,
+            'vmaf_score': display_vmaf,
             'filesize': estimated_size,
             'bounds_hit': bounds_hit
         }

@@ -13,6 +13,10 @@ import shlex
 import re
 import time
 from pathlib import Path
+
+from ...utils.logging import get_logger
+
+logger = get_logger("media_utils")
 from functools import lru_cache
 from typing import Optional, Tuple
 from tqdm import tqdm
@@ -138,7 +142,7 @@ def compute_vmaf_score(reference: Path, distorted: Path, n_threads: int = 0, ena
                 return width, height
         except Exception as e:
             if DEBUG:
-                print(f"[DEBUG] Resolution detection failed for {video_path}: {e}")
+                logger.debug(f"Resolution detection failed for {video_path}: {e}")
         return None
 
     def _create_scaled_reference(ref_path: Path, target_resolution: tuple[int, int]) -> Path | None:
@@ -158,19 +162,19 @@ def compute_vmaf_score(reference: Path, distorted: Path, n_threads: int = 0, ena
             ]
             
             if DEBUG:
-                print(f"[VMAF] Creating scaled reference: {target_width}x{target_height}")
+                logger.vmaf(f"Creating scaled reference: {target_width}x{target_height}")
             
             result = subprocess.run(scale_cmd, capture_output=True, text=True, timeout=300)
             if result.returncode == 0 and temp_scaled.exists():
                 return temp_scaled
             else:
-                print(f"[WARN] Failed to scale reference video: {result.stderr}")
+                logger.debug(f"Failed to scale reference video: {result.stderr}")
                 TEMP_FILES.discard(str(temp_scaled))
                 return None
                 
         except Exception as e:
             if DEBUG:
-                print(f"[DEBUG] Scaling failed: {e}")
+                logger.debug(f"Scaling failed: {e}")
             return None
 
     def _run(ref_path: Path, dist_path: Path, thr: int) -> tuple[int, str]:
@@ -194,8 +198,8 @@ def compute_vmaf_score(reference: Path, distorted: Path, n_threads: int = 0, ena
             "-f", "null", "-"
         ]
         if DEBUG:
-            print("[VMAF-CMD] " + " ".join(shlex.quote(c) for c in cmd))
-            print(f"[VMAF-THREADS] Using {thr if thr > 0 else 'auto'} threads with enhanced options")
+            logger.vmaf("Command: " + " ".join(shlex.quote(c) for c in cmd))
+            logger.vmaf(f"Using {thr if thr > 0 else 'auto'} threads with enhanced options")
         
         # Start CPU monitoring if requested
         cpu_monitor = None
@@ -214,10 +218,10 @@ def compute_vmaf_score(reference: Path, distorted: Path, n_threads: int = 0, ena
 
     # Validate input files exist and are accessible
     if not reference.exists():
-        print(f"[WARN] VMAF reference file missing: {reference}")
+        logger.debug(f"VMAF reference file missing: {reference}")
         return None
     if not distorted.exists():
-        print(f"[WARN] VMAF distorted file missing: {distorted}")
+        logger.debug(f"VMAF distorted file missing: {distorted}")
         return None
 
     # SMART PREPROCESSING: Only scale if absolutely necessary
@@ -229,7 +233,7 @@ def compute_vmaf_score(reference: Path, distorted: Path, n_threads: int = 0, ena
     
     if ref_resolution and dist_resolution and ref_resolution != dist_resolution:
         if DEBUG:
-            print(f"[VMAF] Resolution mismatch: {ref_resolution[0]}x{ref_resolution[1]} → {dist_resolution[0]}x{dist_resolution[1]}")
+            logger.vmaf(f"Resolution mismatch: {ref_resolution[0]}x{ref_resolution[1]} → {dist_resolution[0]}x{dist_resolution[1]}")
         
         # Calculate resolution difference to decide if scaling is worth it
         ref_pixels = ref_resolution[0] * ref_resolution[1]
@@ -238,33 +242,33 @@ def compute_vmaf_score(reference: Path, distorted: Path, n_threads: int = 0, ena
         
         if pixel_ratio > 0.1:  # More than 10% pixel difference
             if DEBUG:
-                print(f"[VMAF] Pre-scaling reference for optimal threading ({pixel_ratio:.1%} difference)")
+                logger.vmaf(f"Pre-scaling reference for optimal threading ({pixel_ratio:.1%} difference)")
             scaled_reference = _create_scaled_reference(reference, dist_resolution)
             if scaled_reference:
                 actual_reference = scaled_reference
             else:
                 if DEBUG:
-                    print(f"[VMAF] Pre-scaling failed, using FFmpeg scaling")
+                    logger.vmaf(f"Pre-scaling failed, using FFmpeg scaling")
         elif DEBUG:
-            print(f"[VMAF] Minor resolution difference ({pixel_ratio:.1%}), using FFmpeg scaling")
+            logger.vmaf(f"Minor resolution difference ({pixel_ratio:.1%}), using FFmpeg scaling")
     elif DEBUG and ref_resolution and dist_resolution:
-        print(f"[VMAF] Same resolution ({ref_resolution[0]}x{ref_resolution[1]}), optimal threading")
+        logger.vmaf(f"Same resolution ({ref_resolution[0]}x{ref_resolution[1]}), optimal threading")
 
     try:
         rc, stderr_text = _run(actual_reference, distorted, n_threads)
         if rc != 0 and n_threads > 0:
             # Retry with auto threads (0) if explicit thread count rejected
-            print(f"[WARN] VMAF failed with n_threads={n_threads}, retrying with auto (0)")
+            logger.debug(f"VMAF failed with n_threads={n_threads}, retrying with auto (0)")
             rc, stderr_text = _run(actual_reference, distorted, 0)
         if rc != 0:
             # Show more context on failure
             last_lines = stderr_text.splitlines()[-3:] if stderr_text else ['unknown error']
             error_msg = ' | '.join(last_lines)
-            print(f"[WARN] VMAF computation failed: {error_msg}")
+            logger.debug(f"VMAF computation failed: {error_msg}")
             if DEBUG and stderr_text:
-                print("[DEBUG] Full VMAF stderr:")
+                logger.debug("Full VMAF stderr:")
                 for l in stderr_text.splitlines()[-10:]:
-                    print("  " + l)
+                    logger.debug("  " + l)
             return None
         
         # Parse VMAF score from stderr - try multiple patterns
@@ -288,16 +292,16 @@ def compute_vmaf_score(reference: Path, distorted: Path, n_threads: int = 0, ena
                     break
         
         if vmaf_score is None:
-            print("[WARN] Could not parse VMAF score from output")
+            logger.debug("Could not parse VMAF score from output")
             if DEBUG and stderr_text:
-                print("[DEBUG] VMAF stderr for parsing:")
+                logger.debug("VMAF stderr for parsing:")
                 for l in stderr_text.splitlines()[-5:]:
-                    print("  " + l)
+                    logger.debug("  " + l)
         
         return vmaf_score
         
     except Exception as e:
-        print(f"[ERR] VMAF computation error: {e}")
+        logger.debug(f"VMAF computation error: {e}")
         if DEBUG:
             import traceback
             traceback.print_exc()
@@ -309,10 +313,10 @@ def compute_vmaf_score(reference: Path, distorted: Path, n_threads: int = 0, ena
                 scaled_reference.unlink()
                 TEMP_FILES.discard(str(scaled_reference))
                 if DEBUG:
-                    print(f"[VMAF] Cleaned up temporary scaled reference")
+                    logger.cleanup("Cleaned up temporary scaled reference")
             except Exception as e:
                 if DEBUG:
-                    print(f"[DEBUG] Failed to cleanup scaled reference: {e}")
+                    logger.debug(f"Failed to cleanup scaled reference: {e}")
 
 
 def compute_vmaf_score_multiprocess(reference: Path, distorted: Path, n_threads: int = 8) -> float | None:
