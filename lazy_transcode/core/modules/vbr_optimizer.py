@@ -370,6 +370,32 @@ def _bisect_bitrate(infile: Path, encoder: str, encoder_type: str,
                 current_min = test_bitrate_val
                 if test_bitrate_val >= max_br * 0.95:  # Close to upper bound
                     bounds_hit = True
+                    
+                    # Early abandonment: progressive thresholds based on expansion factor
+                    abandon_threshold = 15.0  # Default for first bounds hit
+                    if expand_factor > 0:  # We've already tried expanding bounds
+                        # Get more aggressive with each expansion
+                        # expand_factor 1: 12 points, expand_factor 2: 9 points, expand_factor 3: 6 points
+                        abandon_threshold = max(6.0, 15.0 - (expand_factor * 3.0))
+                    
+                    vmaf_diff = vmaf_result - target_vmaf
+                    if vmaf_diff < -abandon_threshold:
+                        print(f"    [ABANDON] VMAF {vmaf_result:.2f} is {abs(vmaf_diff):.1f} points below target")
+                        print(f"    [ABANDON] Threshold: {abandon_threshold:.1f} points - file likely cannot reach target quality")
+                        result = {
+                            'success': False,
+                            'bitrate': best_bitrate_val,
+                            'preset': preset,
+                            'bf': bf,
+                            'refs': refs,
+                            'vmaf_score': best_vmaf,
+                            'filesize': 0,
+                            'bounds_hit': True,
+                            'abandoned': True,
+                            'vmaf_gap': abs(vmaf_diff),
+                            'abandon_threshold': abandon_threshold
+                        }
+                        return result
             else:
                 # Can use lower bitrate
                 current_max = test_bitrate_val
@@ -399,8 +425,7 @@ def _bisect_bitrate(infile: Path, encoder: str, encoder_type: str,
             'refs': refs,
             'vmaf_score': best_vmaf,
             'filesize': estimated_size,
-            'bounds_hit': bounds_hit,
-            'abandoned': bounds_hit and best_vmaf < target_vmaf - 5.0  # More than 5 points below target
+            'bounds_hit': bounds_hit
         }
         
         return result

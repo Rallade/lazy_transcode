@@ -98,7 +98,12 @@ def process_vbr_mode(args, encoder: str, encoder_type: str, files: List[Path]) -
             print(f"[VBR-SUCCESS] {file.name}: {result['bitrate']}kbps, "
                   f"VMAF {result['vmaf_score']:.2f}")
         else:
-            print(f"[VBR-FAILED] {file.name}: Could not find suitable VBR settings")
+            if result.get('abandoned'):
+                vmaf_gap = result.get('vmaf_gap', 0)
+                abandon_threshold = result.get('abandon_threshold', 15.0)
+                print(f"[VBR-ABANDON] {file.name}: Target unreachable (VMAF gap: {vmaf_gap:.1f} points, threshold: {abandon_threshold:.1f})")
+            else:
+                print(f"[VBR-FAILED] {file.name}: Could not find suitable VBR settings")
     
     return vbr_results
 
