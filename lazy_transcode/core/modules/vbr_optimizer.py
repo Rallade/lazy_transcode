@@ -1,409 +1,409 @@
 """
-VBR (Variable Bitrate) optimization module for lazy_transcode.
+VBR (Variable Bit Rate) optimization module for lazy_transcode.
 
-This module handles VBR-specific encoding operations including:
-- VBR encode command building
-- Intelligent bitrate bounds calculation
-- Coordinate descent optimization
-- VBR-specific progress tracking
+This module handles VBR-specific optimization operations including:
+- Intelligent bitrate bounds calculation with progressive expansion
+- Coordinate descent optimization over encoder parameters (preset, bf, refs)
+- Bisection search for minimum bitrate achieving target VMAF
+- VBR encoding command generation with advanced parameters
 """
 
 import subprocess
 import shlex
-import time
 from pathlib import Path
-from typing import List, Tuple, Optional
-from tqdm import tqdm
+from typing import List, Tuple, Optional, Dict
 
-# Import shared utilities
-from .media_utils import get_duration_sec, ffprobe_field, _extract_hdr_metadata
-from .system_utils import run_logged, TEMP_FILES, DEBUG
+from .system_utils import TEMP_FILES, DEBUG
+from .media_utils import get_duration_sec, compute_vmaf_score, ffprobe_field
 
 
 def build_vbr_encode_cmd(infile: Path, outfile: Path, encoder: str, encoder_type: str, 
-                        bitrate_kbps: int, preserve_hdr_metadata: bool = True) -> list[str]:
-    """Build VBR encoding command with specified bitrate"""
-    pixfmt = ffprobe_field(infile, "pix_fmt")
-    prim   = ffprobe_field(infile, "color_primaries")
-    trc    = ffprobe_field(infile, "color_transfer")
-    matrix = ffprobe_field(infile, "colorspace")
-    rng    = ffprobe_field(infile, "color_range")
-
-    is10 = bool(pixfmt and ("10le" in pixfmt or "p10" in pixfmt))
-    profile = "main10" if is10 else "main"
-    pix_out = "p010le" if is10 else "nv12"
-
-    color_args: list[str] = []
-    if prim:   color_args += ["-color_primaries:v:0", prim]
-    if trc:    color_args += ["-color_trc:v:0",       trc]
-    if matrix: color_args += ["-colorspace:v:0",      matrix]
-    if rng:    color_args += ["-color_range:v:0",     rng]
-
-    # Base command
-    cmd = [
-        "ffmpeg", "-hide_banner", "-y",
-    ]
-    if DEBUG:
-        cmd += ["-loglevel", "info"]
-    cmd += [
-        "-i", str(infile),
-        "-map", "0", "-map_metadata", "0", "-map_chapters", "0",
-        "-c:v", encoder,
-    ]
-
-    # Encoder-specific VBR settings
+                        max_bitrate: int, avg_bitrate: int, preset: str = "medium", 
+                        bf: int = 3, refs: int = 3, preserve_hdr_metadata: bool = True) -> List[str]:
+    """Build VBR encoding command with advanced encoder parameters."""
+    cmd = ["ffmpeg", "-hide_banner", "-y"]
+    
+    # Input
+    cmd.extend(["-i", str(infile)])
+    
+    # Video encoding  
+    cmd.extend(["-c:v", encoder])
+    
     if encoder_type == "hardware":
-        if encoder == "hevc_amf":
-            cmd.extend([
-                "-quality", "quality",
-                "-rc", "vbr_peak", "-b:v", f"{bitrate_kbps}k", "-maxrate", f"{int(bitrate_kbps * 1.2)}k",
-                "-profile:v", profile,
-                "-pix_fmt", pix_out,
+        if "nvenc" in encoder:
+            cmd.extend(["-preset", preset, "-rc", "vbr", "-maxrate", f"{max_bitrate}k",
+                       "-b:v", f"{avg_bitrate}k", "-bufsize", f"{max_bitrate * 2}k",
+                       "-bf", str(bf), "-refs", str(refs)])
+        elif "amf" in encoder:
+            cmd.extend(["-usage", "transcoding", "-rc", "vbr_peak", "-b:v", f"{avg_bitrate}k",
+                       "-maxrate", f"{max_bitrate}k", "-bufsize", f"{max_bitrate * 2}k", 
+                       "-bf", str(bf), "-refs", str(refs)])
+        elif "videotoolbox" in encoder:
+            cmd.extend(["-b:v", f"{avg_bitrate}k", "-maxrate", f"{max_bitrate}k",
+                       "-bufsize", f"{max_bitrate * 2}k"])
+        elif "qsv" in encoder:
+            cmd.extend(["-preset", preset, "-b:v", f"{avg_bitrate}k", 
+                       "-maxrate", f"{max_bitrate}k", "-bufsize", f"{max_bitrate * 2}k",
+                       "-bf", str(bf), "-refs", str(refs)])
+    else:
+        # Software encoder (x265) VBR with advanced parameters
+        cmd.extend(["-preset", preset, "-b:v", f"{avg_bitrate}k", 
+                   "-maxrate", f"{max_bitrate}k", "-bufsize", f"{max_bitrate * 2}k"])
+        
+        # x265 specific parameters including advanced options
+        x265_params = [
+            "rd=6",
+            f"bframes={bf}",
+            f"ref={refs}",
+            "me=3",  # umh motion estimation
+            "subme=7",  # high subpixel refinement
+            "merange=25",  # motion estimation range
+            "b-adapt=2",  # adaptive B-frame decision
+            "pmode",  # parallel mode decision
+            "pme"  # parallel motion estimation
+        ]
+        
+        if preserve_hdr_metadata:
+            x265_params.extend([
+                "colorprim=bt2020",
+                "transfer=smpte2084", 
+                "colormatrix=bt2020nc",
+                "master-display=G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1)",
+                "max-cll=1000,400"
             ])
-        elif encoder == "hevc_nvenc":
-            cmd.extend([
-                "-preset", "medium",
-                "-rc", "vbr", "-b:v", f"{bitrate_kbps}k", "-maxrate", f"{int(bitrate_kbps * 1.2)}k",
-                "-profile:v", profile,
-                "-pix_fmt", pix_out,
-            ])
-        elif encoder == "hevc_qsv":
-            cmd.extend([
-                "-preset", "medium",
-                "-b:v", f"{bitrate_kbps}k", "-maxrate", f"{int(bitrate_kbps * 1.2)}k",
-                "-profile:v", profile,
-                "-pix_fmt", pix_out,
-            ])
-    else:  # software (libx265)
-        x265_params = [f"bitrate={bitrate_kbps}"]
-        if is10:
-            # Enable hdr10 signaling if we will embed metadata
-            if preserve_hdr_metadata:
-                master_display, max_cll = _extract_hdr_metadata(infile)
-                if master_display or max_cll:
-                    x265_params.append("hdr10=1")
-                    x265_params.append("hdr10-opt=1")
-                    if master_display:
-                        x265_params.append(f"master-display={master_display}")
-                    if max_cll:
-                        x265_params.append(f"max-cll={max_cll}")
-        cmd.extend([
-            "-x265-params", ":".join(x265_params),
-            "-preset", "medium",
-            "-pix_fmt", pix_out,
-        ])
-
-    # HDR metadata for hardware encoders
-    if preserve_hdr_metadata and encoder_type == "hardware" and is10:
-        master_display, max_cll = _extract_hdr_metadata(infile)
-        if master_display:
-            cmd.extend(["-master_display", master_display])
-        if max_cll:
-            cmd.extend(["-max_cll", max_cll])
-
-    # Add color args and stream copying
-    cmd.extend(color_args)
-    cmd.extend([
-        "-c:a", "copy", "-c:s", "copy", "-c:d", "copy", "-c:t", "copy",
-        "-copy_unknown",
-        "-progress", "pipe:1", "-nostats",
-        str(outfile)
-    ])
-
+        cmd.extend(["-x265-params", ":".join(x265_params)])
+    
+    # Audio and subtitle copy
+    cmd.extend(["-c:a", "copy", "-c:s", "copy"])
+    
+    # Output
+    cmd.append(str(outfile))
+    
     return cmd
 
 
-def encode_vbr_with_progress(infile: Path, outfile: Path, encoder: str, encoder_type: str, 
-                           bitrate_kbps: int, preserve_hdr_metadata: bool = True) -> bool:
-    """Encode video using VBR with progress tracking"""
-    dur = get_duration_sec(infile)
-    if dur <= 0:
-        print(f"[WARN] could not get duration for {infile}")
-    TEMP_FILES.add(str(outfile))
-
-    cmd = build_vbr_encode_cmd(infile, outfile, encoder, encoder_type, bitrate_kbps, preserve_hdr_metadata)
-    
-    if DEBUG:
-        print("[VBR-ENCODE] " + " ".join(shlex.quote(c) for c in cmd))
-    
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    
-    # Use tqdm for progress tracking
-    with tqdm(total=100, desc=f"VBR Encoding {infile.name[:30]}", unit="%", 
-             position=1, leave=False, bar_format="{desc}: {percentage:3.0f}%|{bar}| {elapsed}") as pbar:
-        last_pct = 0
-        if proc.stdout:
-            for line in proc.stdout:
-                if any(line.startswith(prefix) for prefix in ["out_time_ms=", "out_time_us=", "out_time="]) and dur > 0:
-                    try:
-                        time_str = line.split("=",1)[1].strip()
-                        if time_str == "N/A":
-                            continue
-                        
-                        # Parse time based on format
-                        if line.startswith("out_time_ms="):
-                            sec = int(time_str) / 1_000_000
-                        elif line.startswith("out_time_us="):
-                            sec = int(time_str) / 1_000_000
-                        elif line.startswith("out_time="):
-                            if ":" in time_str:
-                                parts = time_str.split(":")
-                                if len(parts) >= 3:
-                                    hours = float(parts[0])
-                                    minutes = float(parts[1]) 
-                                    seconds = float(parts[2])
-                                    sec = hours * 3600 + minutes * 60 + seconds
-                                else:
-                                    continue
-                            else:
-                                sec = float(time_str)
-                        else:
-                            continue
-                            
-                        pct = min(100.0, (sec/dur)*100.0)
-                        update_amt = int(pct) - last_pct
-                        if update_amt > 0:
-                            pbar.update(update_amt)
-                            last_pct = int(pct)
-                    except (ValueError, IndexError):
-                        continue
-
-    proc.wait()
-    return proc.returncode == 0
-
-
 def calculate_intelligent_vbr_bounds(infile: Path, target_vmaf: float, expand_factor: int = 0) -> tuple[int, int]:
-    """Calculate intelligent VBR bitrate bounds based on video characteristics"""
+    """Calculate intelligent VBR bitrate bounds with progressive expansion."""
+    
+    # Get source file bitrate
     try:
-        # Get video properties
-        width = ffprobe_field(infile, "width")
-        height = ffprobe_field(infile, "height")
-        fps = ffprobe_field(infile, "r_frame_rate")
+        result = subprocess.run([
+            "ffprobe", "-v", "error", "-select_streams", "v:0", 
+            "-show_entries", "stream=bit_rate", "-of", "csv=p=0", str(infile)
+        ], capture_output=True, text=True, timeout=30)
         
-        # Parse dimensions
-        w = int(width) if width else 1920
-        h = int(height) if height else 1080
-        
-        # Parse framerate
-        if fps and "/" in fps:
-            num, den = fps.split("/")
-            frame_rate = float(num) / float(den)
+        if result.returncode == 0 and result.stdout.strip():
+            source_bitrate_bps = int(result.stdout.strip())
+            source_bitrate_kbps = source_bitrate_bps // 1000
         else:
-            frame_rate = 24.0
-        
-        # Calculate base bitrate using industry standard formulas
-        pixel_count = w * h
-        
-        # Base bitrate calculation (kbps per 1000 pixels, adjusted for target quality)
-        if target_vmaf >= 95:
-            # High quality
-            base_rate_per_1k_pixels = 0.15
-        elif target_vmaf >= 90:
-            # Medium-high quality
-            base_rate_per_1k_pixels = 0.10
-        else:
-            # Medium quality
-            base_rate_per_1k_pixels = 0.08
-        
-        base_bitrate = int((pixel_count / 1000) * base_rate_per_1k_pixels * frame_rate)
-        
-        # Apply expansion factor for exploration
-        expansion = 1.0 + (expand_factor * 0.3)  # 30% per expansion level
-        
-        # Calculate bounds with expansion
-        lower_bound = max(500, int(base_bitrate * 0.6 / expansion))
-        upper_bound = int(base_bitrate * 1.8 * expansion)
-        
-        if DEBUG:
-            print(f"[VBR-BOUNDS] {w}x{h}@{frame_rate:.1f}fps, target VMAF {target_vmaf}")
-            print(f"[VBR-BOUNDS] Base bitrate: {base_bitrate}kbps, expansion: {expansion:.1f}x")
-            print(f"[VBR-BOUNDS] Bounds: {lower_bound}-{upper_bound}kbps")
-        
-        return lower_bound, upper_bound
-        
-    except Exception as e:
-        if DEBUG:
-            print(f"[VBR-BOUNDS] Error calculating bounds: {e}")
-        # Fallback bounds
-        return 1000, 8000
+            # Fallback: estimate from file size and duration
+            duration = get_duration_sec(infile)
+            if duration and duration > 0:
+                file_size_bits = infile.stat().st_size * 8
+                source_bitrate_kbps = int(file_size_bits / duration / 1000)
+            else:
+                source_bitrate_kbps = 8000  # Conservative fallback
+                
+    except (subprocess.TimeoutExpired, subprocess.SubprocessError, ValueError):
+        source_bitrate_kbps = 8000  # Conservative fallback
+    
+    print(f"[VBR-BOUNDS] Source bitrate: {source_bitrate_kbps}kbps")
+    
+    # Calculate estimated target based on VMAF requirements
+    if target_vmaf >= 95.0:
+        compression_ratio = 0.9  # 90% of original
+    elif target_vmaf >= 90.0:
+        compression_ratio = 0.5  # 50% of original  
+    elif target_vmaf >= 85.0:
+        compression_ratio = 0.35 # 35% of original  
+    else:
+        compression_ratio = 0.25 # 25% of original
+    
+    target_center = int(source_bitrate_kbps * compression_ratio)
+    
+    # Start with tight bounds, expand progressively if needed
+    base_width = 0.15  # Start with ±15% of target
+    expansion_multiplier = 1.8 ** expand_factor  # Expand by 1.8x each time
+    current_width = base_width * expansion_multiplier
+    
+    search_range = int(target_center * current_width)
+    
+    min_bitrate = max(300, target_center - search_range)  
+    max_bitrate = min(20000, target_center + search_range)  
+    
+    if expand_factor == 0:
+        print(f"[VBR-BOUNDS] Starting tight range: {min_bitrate}-{max_bitrate}kbps (center: {target_center}kbps, ±{current_width*100:.0f}%)")
+    else:
+        print(f"[VBR-BOUNDS] Expanded range #{expand_factor}: {min_bitrate}-{max_bitrate}kbps (±{current_width*100:.0f}%)")
+    
+    return min_bitrate, max_bitrate
 
 
-def get_vbr_clip_positions(duration_seconds: int, num_clips: int = 2) -> list[int]:
-    """Calculate optimal clip positions for VBR testing"""
-    if duration_seconds <= 120:  # Short video
+def get_vbr_clip_positions(duration_seconds: float, num_clips: int = 2) -> list[int]:
+    """Calculate evenly distributed clip positions for VBR testing."""
+    duration_int = int(duration_seconds)
+    if duration_int <= 60:
         return [10]  # Single clip near start
     
-    # For longer videos, distribute clips evenly
-    segment_size = duration_seconds / (num_clips + 1)
+    # Distribute clips evenly across the timeline
     positions = []
+    segment_size = duration_int / (num_clips + 1)
     
     for i in range(1, num_clips + 1):
         pos = int(i * segment_size)
         # Ensure we don't go too close to the end
-        pos = min(pos, duration_seconds - 60)
+        pos = min(pos, duration_int - 60)
         positions.append(max(10, pos))  # At least 10 seconds from start
     
     return positions
 
 
 def optimize_encoder_settings_vbr(infile: Path, encoder: str, encoder_type: str, 
-                                 target_vmaf: float, vmaf_tolerance: float, 
-                                 num_clips: int = 2, clip_duration: int = 60,
-                                 max_trials: int = 15, preserve_hdr: bool = True,
-                                 vmaf_threads: int = 8) -> tuple[int, dict]:
+                                  target_vmaf: float, vmaf_tolerance: float,
+                                  clip_positions: list[int], clip_duration: int, 
+                                  max_trials: int = 15) -> dict:
     """
-    Optimize VBR bitrate using coordinate descent to find minimum bitrate achieving target VMAF.
+    Find optimal VBR settings using bisection search and coordinate descent.
     
-    Returns:
-        Tuple of (optimal_bitrate_kbps, optimization_result_dict)
+    Returns dict with:
+    - success: bool
+    - bitrate: int (kbps) 
+    - preset: str
+    - bf: int
+    - refs: int
+    - vmaf_score: float
+    - filesize: int (bytes)
     """
-    from .media_utils import compute_vmaf_score
+    print(f"[VBR] Optimizing {infile.name} for VMAF {target_vmaf:.1f}±{vmaf_tolerance:.1f}")
     
-    print(f"[VBR-OPT] Starting VBR optimization for {infile.name}")
-    print(f"[VBR-OPT] Target: VMAF {target_vmaf:.1f} ±{vmaf_tolerance:.1f}")
+    # Parameter search spaces
+    presets = ["fast", "medium", "slow"] if encoder_type == "hardware" else ["fast", "medium", "slow"]
+    bf_values = [2, 3, 4] if encoder_type == "hardware" else [3, 4, 6]  
+    refs_values = [2, 3, 4] if encoder_type == "hardware" else [3, 4, 6]
     
-    # Get video duration and calculate clip positions
-    duration = get_duration_sec(infile)
-    if duration <= 0:
-        print(f"[VBR-OPT] Could not determine duration for {infile}")
-        return 3000, {"error": "no duration"}
+    best_result = None
+    lowest_bitrate = float('inf')
+    trials = 0
+    abandoned = False  # Flag to break out of all loops when file is hopeless
     
-    clip_positions = get_vbr_clip_positions(duration, num_clips)
-    print(f"[VBR-OPT] Using {len(clip_positions)} clips at positions: {clip_positions}s")
+    # Coordinate descent over parameters
+    for preset in presets:
+        if abandoned:
+            break
+        for bf in bf_values:
+            if abandoned:
+                break
+            for refs in refs_values:
+                if trials >= max_trials or abandoned:
+                    break
+                    
+                print(f"[VBR] Trial {trials+1}/{max_trials}: {preset}, bf={bf}, refs={refs}")
+                
+                # Progressive bound expansion for this parameter combination
+                expand_factor = 0
+                max_expansions = 3
+                result = None
+                
+                while expand_factor <= max_expansions:
+                    # Calculate bounds with current expansion factor
+                    min_bitrate, max_bitrate = calculate_intelligent_vbr_bounds(
+                        infile, target_vmaf, expand_factor
+                    )
+                    
+                    # Bisection search on bitrate for this parameter combination
+                    result = _bisect_bitrate(
+                        infile, encoder, encoder_type, 
+                        target_vmaf, vmaf_tolerance, 
+                        clip_positions, clip_duration,
+                        min_bitrate, max_bitrate,
+                        preset, bf, refs,
+                        expand_factor
+                    )
+                    
+                    # If successful, break out of expansion loop
+                    if result and result['success']:
+                        break
+                    
+                    # If we hit bounds, try expanding
+                    if result and result.get('bounds_hit'):
+                        # Check if file was abandoned due to impossible quality target
+                        if result.get('abandoned'):
+                            print(f"[VBR-ABANDON] File cannot reach target quality - stopping all trials")
+                            abandoned = True
+                            break
+                        
+                        expand_factor += 1
+                        print(f"[VBR] Bounds hit, expanding search range...")
+                    else:
+                        # Some other failure, don't expand further
+                        break
+                
+                trials += 1
+                
+                if result and result['success']:
+                    if result['bitrate'] < lowest_bitrate:
+                        lowest_bitrate = result['bitrate']
+                        best_result = result.copy()
+                        print(f"[VBR] New best: {result['bitrate']}kbps, VMAF {result['vmaf_score']:.2f}")
+                
+                # Early termination if we find a very good result
+                if best_result and best_result['bitrate'] < 2000:  # Under 2Mbps
+                    print(f"[VBR] Early termination - excellent bitrate found")
+                    break
+    
+    if best_result:
+        print(f"[VBR] Optimal: {best_result['bitrate']}kbps, "
+              f"VMAF {best_result['vmaf_score']:.2f}, "
+              f"{best_result['preset']}, bf={best_result['bf']}, refs={best_result['refs']}")
+        return best_result
+    else:
+        print(f"[VBR] Failed to find suitable settings within {max_trials} trials")
+        return {'success': False}
+
+
+def _bisect_bitrate(infile: Path, encoder: str, encoder_type: str,
+                   target_vmaf: float, vmaf_tolerance: float,
+                   clip_positions: list[int], clip_duration: int,
+                   min_br: int, max_br: int,
+                   preset: str, bf: int, refs: int,
+                   expand_factor: int = 0,
+                   max_iterations: int = 8) -> dict:
+    """Top-down bisection search to find minimum bitrate achieving target VMAF."""
     
     # Extract clips for testing
     clips = []
     try:
-        for i, start_pos in enumerate(clip_positions):
-            clip_path = infile.with_name(f"{infile.stem}_vbr_clip{i}_{start_pos}{infile.suffix}")
+        for i, start_time in enumerate(clip_positions):
+            clip_path = infile.with_name(f"{infile.stem}.vbr_clip_{i}_{start_time}{infile.suffix}")
             TEMP_FILES.add(str(clip_path))
             
             extract_cmd = [
                 "ffmpeg", "-hide_banner", "-y",
                 "-loglevel", "error" if not DEBUG else "info",
-                "-ss", str(start_pos),
+                "-ss", str(start_time),
                 "-i", str(infile),
                 "-t", str(clip_duration),
                 "-c", "copy",
                 str(clip_path)
             ]
             
+            if DEBUG:
+                print(f"[VBR-EXTRACT] {' '.join(shlex.quote(c) for c in extract_cmd)}")
+            
             result = subprocess.run(extract_cmd, capture_output=True, text=True)
             if result.returncode == 0 and clip_path.exists():
                 clips.append(clip_path)
             else:
-                print(f"[VBR-OPT] Failed to extract clip {i}")
-                return 3000, {"error": f"clip extraction failed: {i}"}
+                print(f"[VBR] Failed to extract clip {i}")
+                return {'success': False, 'error': f'clip extraction failed: {i}'}
         
-        # Calculate initial bounds
-        initial_lower, initial_upper = calculate_intelligent_vbr_bounds(infile, target_vmaf)
+        print(f"[VBR] Extracted {len(clips)} clips for bisection search")
         
-        # Coordinate descent optimization
-        best_bitrate = None
-        best_vmaf = None
-        trial_results = []
-        
-        # Test function for a specific bitrate
-        def test_bitrate(bitrate_kbps: int) -> float:
+        def test_bitrate_func(bitrate_kbps: int) -> float:
             """Test a bitrate on all clips and return average VMAF"""
             vmaf_scores = []
             
-            for clip_idx, clip in enumerate(clips):
-                encoded_clip = clip.with_name(f"{clip.stem}_vbr{bitrate_kbps}{clip.suffix}")
+            for i, clip in enumerate(clips):
+                encoded_clip = clip.with_name(f"{clip.stem}.vbr_test_{bitrate_kbps}kbps{clip.suffix}")
                 TEMP_FILES.add(str(encoded_clip))
                 
-                try:
-                    # Encode clip at target bitrate
-                    encode_cmd = build_vbr_encode_cmd(clip, encoded_clip, encoder, encoder_type, 
-                                                    bitrate_kbps, preserve_hdr)
-                    # Remove progress tracking for clips
-                    if "-progress" in encode_cmd:
-                        idx = encode_cmd.index("-progress")
-                        encode_cmd = encode_cmd[:idx] + encode_cmd[idx+2:]
-                    if "-nostats" in encode_cmd:
-                        encode_cmd.remove("-nostats")
-                    
-                    result = subprocess.run(encode_cmd, capture_output=True, text=True)
-                    if result.returncode != 0 or not encoded_clip.exists():
-                        if DEBUG:
-                            print(f"[VBR-OPT] Encoding failed for clip {clip_idx} at {bitrate_kbps}kbps")
-                        continue
-                    
-                    # Compute VMAF
-                    vmaf_score = compute_vmaf_score(clip, encoded_clip, n_threads=vmaf_threads)
-                    if vmaf_score is not None:
-                        vmaf_scores.append(vmaf_score)
-                    
-                    # Cleanup encoded clip immediately
-                    if encoded_clip.exists():
-                        encoded_clip.unlink()
-                        TEMP_FILES.discard(str(encoded_clip))
-                        
-                except Exception as e:
-                    if DEBUG:
-                        print(f"[VBR-OPT] Error testing clip {clip_idx}: {e}")
-                    continue
-            
-            return sum(vmaf_scores) / len(vmaf_scores) if vmaf_scores else 0.0
-        
-        # Coordinate descent search
-        current_lower = initial_lower
-        current_upper = initial_upper
-        
-        print(f"[VBR-OPT] Starting coordinate descent: {current_lower}-{current_upper}kbps")
-        
-        with tqdm(total=max_trials, desc="VBR Optimization", position=0) as pbar:
-            for trial in range(max_trials):
-                # Test midpoint
-                test_bitrate_val = (current_lower + current_upper) // 2
-                pbar.set_description(f"VBR Opt - Testing {test_bitrate_val}kbps")
+                # Build VBR encode command with current parameters
+                encode_cmd = build_vbr_encode_cmd(clip, encoded_clip, encoder, encoder_type, 
+                                                bitrate_kbps, int(bitrate_kbps * 0.8), 
+                                                preset, bf, refs, preserve_hdr_metadata=True)
                 
-                avg_vmaf = test_bitrate(test_bitrate_val)
-                trial_results.append((test_bitrate_val, avg_vmaf))
-                
-                vmaf_error = abs(avg_vmaf - target_vmaf)
-                pbar.set_description(f"VBR Opt - {test_bitrate_val}kbps: VMAF {avg_vmaf:.1f}")
+                if not DEBUG:
+                    encode_cmd.extend(["-loglevel", "error"])
                 
                 if DEBUG:
-                    print(f"[VBR-OPT] Trial {trial+1}: {test_bitrate_val}kbps → VMAF {avg_vmaf:.2f} (error: {vmaf_error:.2f})")
+                    print(f"[VBR-TEST] {' '.join(shlex.quote(c) for c in encode_cmd)}")
                 
-                # Check convergence
-                if vmaf_error <= vmaf_tolerance:
-                    best_bitrate = test_bitrate_val
-                    best_vmaf = avg_vmaf
-                    print(f"[VBR-OPT] Converged at {best_bitrate}kbps (VMAF {best_vmaf:.2f})")
-                    break
+                result = subprocess.run(encode_cmd, capture_output=True, text=True)
+                if result.returncode != 0 or not encoded_clip.exists():
+                    if DEBUG:
+                        print(f"[VBR] Encoding failed for clip {i} at {bitrate_kbps}kbps: {result.stderr}")
+                    continue
                 
-                # Update search bounds
-                if avg_vmaf < target_vmaf:
-                    # Need higher quality, increase bitrate
-                    current_lower = test_bitrate_val
-                else:
-                    # Quality sufficient, try lower bitrate
-                    current_upper = test_bitrate_val
+                # Compute VMAF
+                vmaf_score = compute_vmaf_score(clip, encoded_clip, n_threads=8)
+                if vmaf_score is not None:
+                    vmaf_scores.append(vmaf_score)
+                    if DEBUG:
+                        print(f"[VBR-TEST] Clip {i}: {bitrate_kbps}kbps -> VMAF {vmaf_score:.2f}")
                 
-                # Check if bounds are too close
-                if current_upper - current_lower < 100:  # Less than 100kbps difference
-                    best_bitrate = current_upper  # Choose higher bitrate for safety
-                    best_vmaf = avg_vmaf
-                    print(f"[VBR-OPT] Bounds converged at {best_bitrate}kbps")
-                    break
-                
-                pbar.update(1)
+                # Cleanup encoded clip
+                if not DEBUG and encoded_clip.exists():
+                    try:
+                        encoded_clip.unlink()
+                        TEMP_FILES.discard(str(encoded_clip))
+                    except:
+                        pass
+            
+            avg_vmaf = sum(vmaf_scores) / len(vmaf_scores) if vmaf_scores else 0.0
+            print(f"[VBR-TEST] {bitrate_kbps}kbps: Average VMAF {avg_vmaf:.2f} from {len(vmaf_scores)} clips")
+            return avg_vmaf
         
-        # Fallback if no convergence
-        if best_bitrate is None:
-            best_bitrate = (current_lower + current_upper) // 2
-            best_vmaf = target_vmaf  # Estimate
-            print(f"[VBR-OPT] Using fallback bitrate: {best_bitrate}kbps")
+        # Bisection search
+        current_min = min_br
+        current_max = max_br
+        best_bitrate_val = current_max
+        best_vmaf = 0.0
+        bounds_hit = False
         
-        return best_bitrate, {
-            "vmaf": best_vmaf,
-            "trials": len(trial_results),
-            "bounds": (initial_lower, initial_upper),
-            "final_bounds": (current_lower, current_upper),
-            "trial_results": trial_results
+        print(f"[VBR-BISECT] Starting bisection: {current_min}-{current_max}kbps")
+        
+        for iteration in range(max_iterations):
+            # Test midpoint
+            test_bitrate_val = (current_min + current_max) // 2
+            
+            print(f"[VBR-BISECT] Iteration {iteration+1}: Testing {test_bitrate_val}kbps")
+            vmaf_result = test_bitrate_func(test_bitrate_val)
+            
+            if abs(vmaf_result - target_vmaf) <= vmaf_tolerance:
+                # Target achieved
+                best_bitrate_val = test_bitrate_val
+                best_vmaf = vmaf_result
+                print(f"[VBR-BISECT] Target achieved: {test_bitrate_val}kbps, VMAF {vmaf_result:.2f}")
+                break
+            elif vmaf_result < target_vmaf:
+                # Need higher bitrate
+                current_min = test_bitrate_val
+                if test_bitrate_val >= max_br * 0.95:  # Close to upper bound
+                    bounds_hit = True
+            else:
+                # Can use lower bitrate
+                current_max = test_bitrate_val
+                best_bitrate_val = test_bitrate_val
+                best_vmaf = vmaf_result
+            
+            # Check convergence
+            if current_max - current_min < 100:  # 100kbps convergence
+                print(f"[VBR-BISECT] Converged to {best_bitrate_val}kbps, VMAF {best_vmaf:.2f}")
+                break
+        
+        # Check if target was achieved within tolerance
+        success = abs(best_vmaf - target_vmaf) <= vmaf_tolerance
+        
+        # Estimate final file size
+        if success:
+            duration = get_duration_sec(infile)
+            estimated_size = int((best_bitrate_val * 1000 * duration) / 8) if duration > 0 else 0
+        else:
+            estimated_size = 0
+        
+        result = {
+            'success': success,
+            'bitrate': best_bitrate_val,
+            'preset': preset,
+            'bf': bf,
+            'refs': refs,
+            'vmaf_score': best_vmaf,
+            'filesize': estimated_size,
+            'bounds_hit': bounds_hit,
+            'abandoned': bounds_hit and best_vmaf < target_vmaf - 5.0  # More than 5 points below target
         }
+        
+        return result
         
     finally:
         # Cleanup clips
@@ -415,3 +415,38 @@ def optimize_encoder_settings_vbr(infile: Path, encoder: str, encoder_type: str,
                     TEMP_FILES.discard(str(clip))
                 except:
                     pass
+
+
+def _test_vbr_encoding(infile: Path, encoder: str, encoder_type: str, bitrate_kbps: int,
+                      preserve_hdr_metadata: bool = True) -> bool:
+    """Test VBR encoding at specified bitrate."""
+    test_output = infile.with_name(f"{infile.stem}.vbr_test_{bitrate_kbps}kbps{infile.suffix}")
+    TEMP_FILES.add(str(test_output))
+    
+    try:
+        cmd = build_vbr_encode_cmd(infile, test_output, encoder, encoder_type, 
+                                  bitrate_kbps, int(bitrate_kbps * 0.8), 
+                                  preserve_hdr_metadata=preserve_hdr_metadata)
+        
+        if not DEBUG:
+            cmd.extend(["-loglevel", "error"])
+        
+        if DEBUG:
+            print(f"[VBR-TEST-ENCODE] {' '.join(shlex.quote(c) for c in cmd)}")
+        
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        success = result.returncode == 0 and test_output.exists()
+        
+        if not success and DEBUG:
+            print(f"[VBR-TEST-ENCODE] Failed: {result.stderr}")
+        
+        return success
+        
+    finally:
+        # Cleanup test file
+        if not DEBUG and test_output.exists():
+            try:
+                test_output.unlink()
+                TEMP_FILES.discard(str(test_output))
+            except:
+                pass
