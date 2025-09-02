@@ -191,7 +191,7 @@ def get_vbr_clip_positions(duration_seconds: float, num_clips: int = 2) -> list[
 def optimize_encoder_settings_vbr(infile: Path, encoder: str, encoder_type: str, 
                                   target_vmaf: float, vmaf_tolerance: float,
                                   clip_positions: list[int], clip_duration: int, 
-                                  max_trials: int = 15) -> dict:
+                                  max_trials: int = 8) -> dict:
     """
     Find optimal VBR settings using bisection search and intelligent coordinate descent.
     
@@ -230,6 +230,31 @@ def optimize_encoder_settings_vbr(infile: Path, encoder: str, encoder_type: str,
     trials = 0
     abandoned = False
     
+    # Early exit tracking
+    last_improvement_gain = 0
+    consecutive_small_gains = 0
+    target_hit_count = 0
+    similar_results = []  # Track very similar results to avoid redundant work
+    
+    # Calculate source bitrate for efficiency checks
+    try:
+        result = subprocess.run([
+            "ffprobe", "-v", "error", "-select_streams", "v:0", 
+            "-show_entries", "stream=bit_rate", "-of", "csv=p=0", str(infile)
+        ], capture_output=True, text=True, timeout=30)
+        
+        if result.returncode == 0 and result.stdout.strip():
+            source_bitrate_kbps = int(result.stdout.strip()) // 1000
+        else:
+            duration = get_duration_sec(infile)
+            if duration and duration > 0:
+                file_size_bits = infile.stat().st_size * 8
+                source_bitrate_kbps = int(file_size_bits / duration / 1000)
+            else:
+                source_bitrate_kbps = 8000
+    except Exception:
+        source_bitrate_kbps = 8000
+    
     # Phase 1: Test medium preset with standard parameters
     print(f"[VBR] Phase 1: Testing balanced settings")
     for preset in presets:
@@ -256,14 +281,74 @@ def optimize_encoder_settings_vbr(infile: Path, encoder: str, encoder_type: str,
                     break
                 
                 if result and result.get('success'):
+                    # Calculate improvement metrics
+                    previous_best = lowest_bitrate if best_result else float('inf')
+                    improvement_gain = previous_best - result['bitrate']
+                    compression_ratio = result['bitrate'] / source_bitrate_kbps
+                    vmaf_margin = result['vmaf_score'] - target_vmaf
+                    
                     if result['bitrate'] < lowest_bitrate:
                         lowest_bitrate = result['bitrate']
                         best_result = result.copy()
-                        print(f"[VBR] New best: {result['bitrate']}kbps, VMAF {result['vmaf_score']:.2f}")
+                        print(f"[VBR] New best: {result['bitrate']}kbps, VMAF {result['vmaf_score']:.2f} "
+                              f"(↓{improvement_gain:.0f}kbps, {compression_ratio:.1%} compression)")
+                        
+                        # Track improvement trends for diminishing returns detection
+                        if improvement_gain < 200:  # Less than 200kbps improvement
+                            consecutive_small_gains += 1
+                        else:
+                            consecutive_small_gains = 0
+                        last_improvement_gain = improvement_gain
                     
-                    # Early success - check if we should continue optimizing
+                    # Count how many times we've hit target quality
+                    if vmaf_margin >= -vmaf_tolerance:
+                        target_hit_count += 1
+                    
+                    # Check for very similar results (avoid redundant work)
+                    is_similar = any(
+                        abs(prev_result['bitrate'] - result['bitrate']) < 100 and 
+                        abs(prev_result['vmaf_score'] - result['vmaf_score']) < 0.5
+                        for prev_result in similar_results
+                    )
+                    if is_similar:
+                        print(f"[VBR-EARLY-EXIT] Very similar result already found - avoiding redundant work")
+                        break
+                    else:
+                        similar_results.append({
+                            'bitrate': result['bitrate'], 
+                            'vmaf_score': result['vmaf_score']
+                        })
+                    
+                    # EARLY EXIT STRATEGIES
+                    
+                    # 1. Excellent compression achieved
+                    if compression_ratio < 0.25:  # Under 25% of original bitrate
+                        print(f"[VBR-EARLY-EXIT] Excellent compression ratio {compression_ratio:.1%} - stopping optimization")
+                        break
+                    
+                    # 2. High quality with very low bitrate
+                    if result['bitrate'] < 1500 and vmaf_margin >= 0:
+                        print(f"[VBR-EARLY-EXIT] Exceptional result: {result['bitrate']}kbps with {result['vmaf_score']:.2f} VMAF")
+                        break
+                    
+                    # 3. Target hit multiple times with good compression
+                    if target_hit_count >= 2 and compression_ratio < 0.5:
+                        print(f"[VBR-EARLY-EXIT] Target consistently achieved with good compression - optimization complete")
+                        break
+                    
+                    # 4. Diminishing returns detection
+                    if consecutive_small_gains >= 2 and vmaf_margin >= -vmaf_tolerance:
+                        print(f"[VBR-EARLY-EXIT] Diminishing returns detected (consecutive gains <200kbps) with acceptable quality")
+                        break
+                    
+                    # 5. Perfect quality hit early
+                    if vmaf_margin >= vmaf_tolerance * 2:  # Way above target
+                        print(f"[VBR-EARLY-EXIT] Quality significantly exceeds target ({result['vmaf_score']:.2f} vs {target_vmaf:.1f})")
+                        break
+                    
+                    # Early success - check if we should continue optimizing (existing logic)
                     if result['bitrate'] < 2000:  # Excellent result
-                        print(f"[VBR] Excellent bitrate found - skipping further trials")
+                        print(f"[VBR-EARLY-EXIT] Excellent bitrate found - skipping further trials")
                         break
     
     # Phase 2: If no success or high bitrate, try more aggressive settings
@@ -299,9 +384,20 @@ def optimize_encoder_settings_vbr(infile: Path, encoder: str, encoder_type: str,
                     break
                 
                 if result and result.get('success') and result['bitrate'] < lowest_bitrate:
+                    # Calculate metrics
+                    improvement_gain = lowest_bitrate - result['bitrate']
+                    compression_ratio = result['bitrate'] / source_bitrate_kbps
+                    vmaf_margin = result['vmaf_score'] - target_vmaf
+                    
                     lowest_bitrate = result['bitrate']
                     best_result = result.copy()
-                    print(f"[VBR] New best: {result['bitrate']}kbps, VMAF {result['vmaf_score']:.2f}")
+                    print(f"[VBR] New best: {result['bitrate']}kbps, VMAF {result['vmaf_score']:.2f} "
+                          f"(↓{improvement_gain:.0f}kbps, {compression_ratio:.1%} compression)")
+                    
+                    # Apply same early exit strategies in Phase 2
+                    if compression_ratio < 0.25 or (result['bitrate'] < 1500 and vmaf_margin >= 0):
+                        print(f"[VBR-EARLY-EXIT] Phase 2: Exceptional result achieved")
+                        break
     
     # Phase 3: If still no success, try fast preset for difficult content
     if not best_result and not abandoned and trials < max_trials:
