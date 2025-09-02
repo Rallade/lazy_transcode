@@ -1,15 +1,32 @@
 # Lazy Transcode
 
-A smart video transcoding utility with VMAF-based quality optimization.
+A smart video transcoding utility with VMAF-based quality optimization and modular architecture.
 
 ## Features
 
 - **VMAF-based Quality Optimization**: Automatically finds the optimal quality point using VMAF scores
+- **VBR Mode**: Variable bitrate optimization with coordinate descent algorithm
 - **Batch Processing**: Process multiple directories with a single command
 - **Smart Codec Detection**: Skip files that already use efficient codecs (H.265/HEVC, AV1)
+- **Multi-Encoder Support**: Hardware (hevc_amf, hevc_nvenc, hevc_qsv) and software (libx265) encoders
+- **Modular Architecture**: Clean, testable modules for encoder configuration, VMAF evaluation, and file management
 - **Pause/Resume**: Graceful pause and resume functionality with Ctrl+C
 - **Progress Tracking**: Real-time progress bars and timing information
 - **Non-destructive Mode**: Option to save transcoded files to separate directories
+
+## Modes
+
+### QP Mode (Default)
+Finds the optimal QP (Quantizer Parameter) value to achieve target VMAF score:
+```bash
+lazy-transcode --mode qp --vmaf-target 95.0 /path/to/video.mkv
+```
+
+### VBR Mode  
+Optimizes bitrate using coordinate descent to find minimum bitrate achieving target VMAF:
+```bash
+lazy-transcode --mode vbr --vmaf-target 95.0 --vmaf-tol 1.0 /path/to/video.mkv
+```
 
 ## Installation
 
