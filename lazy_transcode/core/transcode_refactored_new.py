@@ -62,7 +62,7 @@ def process_vbr_mode(args, encoder: str, encoder_type: str, files: List[Path]) -
         
         # Skip if wrong codec
         current_codec = get_video_codec(file)
-        if should_skip_codec(current_codec):
+        if should_skip_codec(current_codec, skip_x265=True, skip_hevc=True):
             print(f"[VBR-SKIP] {file.name}: Already HEVC/x265")
             continue
         
@@ -98,12 +98,7 @@ def process_vbr_mode(args, encoder: str, encoder_type: str, files: List[Path]) -
             print(f"[VBR-SUCCESS] {file.name}: {result['bitrate']}kbps, "
                   f"VMAF {result['vmaf_score']:.2f}")
         else:
-            if result.get('abandoned'):
-                vmaf_gap = result.get('vmaf_gap', 0)
-                abandon_threshold = result.get('abandon_threshold', 15.0)
-                print(f"[VBR-ABANDON] {file.name}: Target unreachable (VMAF gap: {vmaf_gap:.1f} points, threshold: {abandon_threshold:.1f})")
-            else:
-                print(f"[VBR-FAILED] {file.name}: Could not find suitable VBR settings")
+            print(f"[VBR-FAILED] {file.name}: Could not find suitable VBR settings")
     
     return vbr_results
 
@@ -116,8 +111,10 @@ def process_qp_mode(args, encoder: str, encoder_type: str, files: List[Path]) ->
         print(f"[QP-AUTO] Finding optimal QP for {args.vmaf_target:.1f} VMAF")
         optimal_qp = find_optimal_qp(
             files, encoder, encoder_type,
-            vmaf_target=args.vmaf_target,
-            vmaf_min_threshold=args.vmaf_target - args.vmaf_tol
+            target_vmaf=args.vmaf_target,
+            vmaf_tolerance=args.vmaf_tol,
+            num_clips=args.vbr_clips,  # Use same clips
+            clip_duration=args.vbr_clip_duration  # Use same duration
         )
         
         if optimal_qp > 0:
@@ -134,7 +131,7 @@ def process_qp_mode(args, encoder: str, encoder_type: str, files: List[Path]) ->
     for file in files:
         # Skip if wrong codec
         current_codec = get_video_codec(file)
-        if should_skip_codec(current_codec):
+        if should_skip_codec(current_codec, skip_x265=True, skip_hevc=True):
             print(f"[QP-SKIP] {file.name}: Already HEVC/x265")
             continue
         
@@ -203,8 +200,8 @@ def main():
                        help="Number of clips for VBR optimization (default: 2)")
     parser.add_argument("--vbr-clip-duration", type=int, default=60,
                        help="Duration of each VBR test clip in seconds (default: 60)")
-    parser.add_argument("--vbr-max-trials", type=int, default=8,
-                       help="Maximum VBR optimization trials (default: 8)")
+    parser.add_argument("--vbr-max-trials", type=int, default=15,
+                       help="Maximum VBR optimization trials (default: 15)")
     
     # Encoder settings
     parser.add_argument("--encoder", choices=["cpu", "nvenc", "amf", "qsv", "videotoolbox"],
@@ -240,8 +237,7 @@ def main():
     if input_path.is_file():
         files = [input_path]
     else:
-        discovery_result = file_manager.discover_video_files(input_path)
-        files = discovery_result.files_to_transcode
+        files = file_manager.discover_video_files(input_path)
     
     # Apply limit if specified
     if args.limit:
@@ -255,20 +251,8 @@ def main():
     print(f"[DISCOVERY] Found {len(files)} video files")
     
     # Detect encoder
-    if args.encoder:
-        # Map CLI encoder names to FFmpeg encoders
-        encoder_map = {
-            "cpu": "libx265",
-            "nvenc": "hevc_nvenc",
-            "amf": "hevc_amf", 
-            "qsv": "hevc_qsv",
-            "videotoolbox": "hevc_videotoolbox"
-        }
-        encoder = encoder_map.get(args.encoder, "libx265")
-        encoder_type = "software" if encoder == "libx265" else "hardware"
-    else:
-        encoder, encoder_type = detect_hevc_encoder()
-    
+    encoder_builder = EncoderConfigBuilder()
+    encoder, encoder_type = encoder_builder.detect_best_encoder(force_encoder=args.encoder)
     print(f"[ENCODER] Selected: {encoder} ({encoder_type})")
     
     # Setup output directory
@@ -301,23 +285,12 @@ def main():
         print(f"\n[MODE] Auto (VBR + QP)")
         vbr_results, qp_map = process_auto_mode(args, encoder, encoder_type, files)
     
-    # Verification step  
+    # Verification step
     if args.verify and (vbr_results or qp_map):
-        # For VBR results, we need to create a simple verification
-        if vbr_results:
-            print(f"\n[VERIFY] Found {len(vbr_results)} VBR optimized files")
-            for file, result in vbr_results.items():
-                print(f"  {file.name}: {result['bitrate']}kbps, VMAF {result['vmaf_score']:.2f}")
-        
-        if qp_map:
-            print(f"\n[VERIFY] Found {len(qp_map)} QP optimized files")
-            # Use the simple verification for QP files
-            qp_files = list(qp_map.keys())
-            qp_value = list(qp_map.values())[0] if qp_map else 23
-            success = verify_and_prompt_transcode(qp_files, qp_value, encoder, encoder_type, args, args.preserve_hdr)
-            if not success:
-                print("[CANCELLED] User cancelled transcoding")
-                return 0
+        success = verify_and_prompt_transcode(vbr_results, qp_map, encoder, encoder_type, output_dir)
+        if not success:
+            print("[CANCELLED] User cancelled transcoding")
+            return 0
     
     # Execute transcoding
     if vbr_results:
@@ -329,7 +302,8 @@ def main():
             print(f"[VBR-ENCODE] {file.name} -> {output_file.name}")
             success = transcode_file_vbr(
                 file, output_file, encoder, encoder_type,
-                result['bitrate'], int(result['bitrate'] * 0.8),
+                result['bitrate'], result.get('preset', 'medium'),
+                result.get('bf', 3), result.get('refs', 3),
                 preserve_hdr_metadata=args.preserve_hdr
             )
             
@@ -343,14 +317,8 @@ def main():
         
         if args.parallel > 1:
             # Use parallel processor
-            processor = ParallelTranscoder(vmaf_threads=8)
-            qp_files = list(qp_map.keys())
-            completed = processor.process_files_with_qp_map(
-                qp_files, qp_map, encoder, encoder_type, 
-                args.vmaf_target, args.vmaf_target - args.vmaf_tol,
-                preserve_hdr_metadata=args.preserve_hdr
-            )
-            print(f"[QP-PARALLEL] Completed {completed}/{len(qp_files)} files")
+            processor = ParallelTranscoder(max_workers=args.parallel)
+            processor.process_files_with_qp_map(qp_map, encoder, encoder_type, output_dir)
         else:
             # Sequential processing
             for file, qp in qp_map.items():
@@ -366,7 +334,7 @@ def main():
     
     # Display summary
     if vbr_results:
-        display_vbr_results_summary(vbr_results, len(files))
+        display_vbr_results_summary(vbr_results, output_dir)
     
     print(f"\n[COMPLETE] Transcoding finished")
     print(f"[OUTPUT] Results in: {output_dir}")
@@ -377,31 +345,23 @@ def main():
 if __name__ == "__main__":
     import signal
     import atexit
+    from .modules.system_utils import cleanup_temp_files
     
-    # Setup cleanup handlers - use basic temp file cleanup
-    def cleanup_handler():
-        """Basic cleanup of temporary files."""
-        for temp_file in TEMP_FILES:
-            try:
-                Path(temp_file).unlink(missing_ok=True)
-            except:
-                pass
-        TEMP_FILES.clear()
-    
-    atexit.register(cleanup_handler)
-    signal.signal(signal.SIGINT, lambda s, f: (cleanup_handler(), sys.exit(1)))
-    signal.signal(signal.SIGTERM, lambda s, f: (cleanup_handler(), sys.exit(1)))
+    # Setup cleanup handlers
+    atexit.register(cleanup_temp_files)
+    signal.signal(signal.SIGINT, lambda s, f: (cleanup_temp_files(), sys.exit(1)))
+    signal.signal(signal.SIGTERM, lambda s, f: (cleanup_temp_files(), sys.exit(1)))
     
     try:
         sys.exit(main())
     except KeyboardInterrupt:
         print("\n[INTERRUPTED] Cleaning up...")
-        cleanup_handler()
+        cleanup_temp_files()
         sys.exit(1)
     except Exception as e:
         print(f"\n[ERROR] {e}")
         if DEBUG:
             import traceback
             traceback.print_exc()
-        cleanup_handler()
+        cleanup_temp_files()
         sys.exit(1)
