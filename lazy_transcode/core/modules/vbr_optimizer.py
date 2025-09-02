@@ -202,6 +202,9 @@ def optimize_encoder_settings_vbr(infile: Path, encoder: str, encoder_type: str,
     abandoned = False
     preset_results = []  # Track results by preset for rollback analysis
     
+    # Initialize shared test cache to prevent redundant testing
+    test_cache = {}
+    
     # Early exit tracking
     last_improvement_gain = 0
     consecutive_small_gains = 0
@@ -257,7 +260,7 @@ def optimize_encoder_settings_vbr(infile: Path, encoder: str, encoder_type: str,
                 
                 result = _test_parameter_combination(
                     infile, encoder, encoder_type, target_vmaf, vmaf_tolerance,
-                    clip_positions, clip_duration, preset, bf, refs
+                    clip_positions, clip_duration, preset, bf, refs, test_cache
                 )
                 
                 if result.get('abandoned'):
@@ -448,8 +451,13 @@ def optimize_encoder_settings_vbr(infile: Path, encoder: str, encoder_type: str,
 def _test_parameter_combination(infile: Path, encoder: str, encoder_type: str,
                                target_vmaf: float, vmaf_tolerance: float,
                                clip_positions: list[int], clip_duration: int,
-                               preset: str, bf: int, refs: int) -> dict:
+                               preset: str, bf: int, refs: int,
+                               test_cache: dict | None = None) -> dict:
     """Test a specific parameter combination with progressive bound expansion."""
+    # Initialize cache if not provided
+    if test_cache is None:
+        test_cache = {}
+        
     expand_factor = 0
     max_expansions = 3
     
@@ -466,7 +474,7 @@ def _test_parameter_combination(infile: Path, encoder: str, encoder_type: str,
             clip_positions, clip_duration,
             min_bitrate, max_bitrate,
             preset, bf, refs,
-            expand_factor
+            expand_factor, test_cache=test_cache
         )
         
         # If successful, return result
@@ -495,8 +503,13 @@ def _bisect_bitrate(infile: Path, encoder: str, encoder_type: str,
                    min_br: int, max_br: int,
                    preset: str, bf: int, refs: int,
                    expand_factor: int = 0,
-                   max_iterations: int = 8) -> dict:
+                   max_iterations: int = 8,
+                   test_cache: dict | None = None) -> dict:
     """Top-down bisection search to find minimum bitrate achieving target VMAF."""
+    
+    # Initialize cache if not provided
+    if test_cache is None:
+        test_cache = {}
     
     # Extract clips for testing
     clips = []
@@ -527,8 +540,17 @@ def _bisect_bitrate(infile: Path, encoder: str, encoder_type: str,
         
         print(f"[VBR] Extracted {len(clips)} clips for bisection search")
         
-        def test_bitrate_func(bitrate_kbps: int) -> float:
+        def test_bitrate_func(bitrate_kbps: int) -> float | None:
             """Test a bitrate on all clips and return average VMAF"""
+            # Create cache key based on all parameters that affect encoding
+            cache_key = (bitrate_kbps, preset, bf, refs, encoder, encoder_type)
+            
+            # Check cache first
+            if cache_key in test_cache:
+                cached_result = test_cache[cache_key]
+                print(f"[VBR-CACHE] {bitrate_kbps}kbps: Using cached VMAF {cached_result:.2f}")
+                return cached_result
+            
             vmaf_scores = []
             
             for i, clip in enumerate(clips):
@@ -567,7 +589,16 @@ def _bisect_bitrate(infile: Path, encoder: str, encoder_type: str,
                     except:
                         pass
             
-            avg_vmaf = sum(vmaf_scores) / len(vmaf_scores) if vmaf_scores else 0.0
+            avg_vmaf = sum(vmaf_scores) / len(vmaf_scores) if vmaf_scores else None
+            
+            # Handle case where no clips could be processed
+            if avg_vmaf is None or len(vmaf_scores) == 0:
+                print(f"[VBR-ERROR] {bitrate_kbps}kbps: No valid VMAF scores from {len(clips)} clips")
+                return None
+            
+            # Store result in cache
+            test_cache[cache_key] = avg_vmaf
+            
             print(f"[VBR-TEST] {bitrate_kbps}kbps: Average VMAF {avg_vmaf:.2f} from {len(vmaf_scores)} clips")
             return avg_vmaf
         
@@ -604,6 +635,20 @@ def _bisect_bitrate(infile: Path, encoder: str, encoder_type: str,
                       f"[bounds: {current_min}-{current_max}kbps]")
             
             vmaf_result = test_bitrate_func(test_bitrate_val)
+            
+            # Check for VMAF calculation failure
+            if vmaf_result is None or vmaf_result <= 0.0:
+                print(f"[VBR-ERROR] VMAF calculation failed at {test_bitrate_val}kbps - aborting trial")
+                return {
+                    'success': False,
+                    'bitrate': test_bitrate_val,
+                    'preset': preset,
+                    'bf': bf,
+                    'refs': refs,
+                    'vmaf_score': 0.0,
+                    'filesize': 0,
+                    'error': 'vmaf_calculation_failed'
+                }
             
             # SMART EARLY DETECTION: 
             # For slow→medium→fast progression, detect when preset is insufficient early
