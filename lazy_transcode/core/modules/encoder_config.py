@@ -1,13 +1,20 @@
 """
-EncoderConfigBuilder: Centralized FFmpeg command construction
+Encoder Configuration Builder for lazy_transcode.
+
+Centralized FFmpeg command construction with HDR detection and encoder optimization.
 
 Eliminates 500+ lines of duplication between build_encode_cmd and build_vbr_encode_cmd
 by providing a unified interface for building encoder commands with different configurations.
 """
 
 import os
+import subprocess
 import re
 from pathlib import Path
+from typing import Dict, Any, List, Optional, Tuple, Union
+
+from .media_utils import ffprobe_field
+from .system_utils import run_command
 from typing import Dict, Any, List, Optional, Tuple, Union
 
 
@@ -23,8 +30,45 @@ def ffprobe_field(path: Path, field: str) -> Optional[str]:
 
 
 def _extract_hdr_metadata(infile: Path) -> Tuple[Optional[str], Optional[str]]:
-    """Extract HDR metadata from input file."""
+    """Extract HDR metadata from input file - only if it's actually HDR content."""
     try:
+        # First check if it's actually HDR content using proper detection
+        import subprocess
+        import json
+        
+        # Inline HDR detection (same logic as detect_hdr_content)
+        cmd = [
+            "ffprobe", "-v", "quiet", "-print_format", "json", "-show_streams",
+            "-select_streams", "v:0", str(infile)
+        ]
+        
+        result = run_command(cmd, timeout=10)
+        if result.returncode != 0:
+            return None, None
+            
+        data = json.loads(result.stdout)
+        video_stream = data.get('streams', [{}])[0]
+        
+        # Check for HDR indicators
+        color_primaries = video_stream.get('color_primaries', '').lower()
+        color_trc = video_stream.get('color_trc', '').lower() 
+        color_space = video_stream.get('color_space', '').lower()
+        
+        # HDR indicators
+        hdr_primaries = ['bt2020', 'bt2020-10', 'bt2020-12']
+        hdr_transfer = ['smpte2084', 'arib-std-b67', 'smpte428', 'hlg']
+        hdr_colorspace = ['bt2020nc', 'bt2020c', 'bt2020_ncl', 'bt2020_cl']
+        
+        is_hdr = (
+            any(prim in color_primaries for prim in hdr_primaries) or
+            any(trc in color_trc for trc in hdr_transfer) or  
+            any(cs in color_space for cs in hdr_colorspace)
+        )
+        
+        if not is_hdr:
+            return None, None  # Not HDR content, don't extract metadata
+            
+        # Only extract metadata if it's genuine HDR content
         cmd = f'ffprobe -v quiet -select_streams v:0 -show_frames -read_intervals %+#1 "{infile}"'
         output = os.popen(cmd).read()
         

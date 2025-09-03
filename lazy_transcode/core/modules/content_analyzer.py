@@ -28,8 +28,8 @@ from pathlib import Path
 from typing import Tuple, Optional, Dict, List
 from dataclasses import dataclass
 
-from .system_utils import TEMP_FILES
-from .media_utils import get_duration_sec, ffprobe_field
+from .system_utils import TEMP_FILES, run_command
+from .media_utils import get_duration_sec, ffprobe_field, get_video_dimensions
 from ...utils.logging import get_logger
 
 logger = get_logger()
@@ -144,7 +144,7 @@ class ContentAnalyzer:
             str(output)
         ]
         
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = run_command(cmd)
         if result.returncode != 0:
             raise RuntimeError(f"Sample extraction failed: {result.stderr}")
     
@@ -168,15 +168,14 @@ class ContentAnalyzer:
         ]
         
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = run_command(cmd)
             
             # Parse sobel filter output (simplified implementation)
             # In practice, would extract actual sobel variance values
             # For now, estimate based on video characteristics
             
             # Get basic video properties for SI estimation
-            width = int(ffprobe_field(video_path, 'width') or 1920)
-            height = int(ffprobe_field(video_path, 'height') or 1080)
+            width, height = get_video_dimensions(video_path)
             
             # Estimate SI based on resolution and content detection
             resolution_factor = math.sqrt(width * height) / 1000  # Normalize to ~2.0 for 1080p
@@ -217,7 +216,7 @@ class ContentAnalyzer:
         ]
         
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = run_command(cmd)
             
             # Parse mpdecimate output to estimate motion
             output_lines = result.stderr.split('\n')

@@ -17,6 +17,8 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Set, Tuple, Dict, Any
+
+from .system_utils import run_command
 from ...utils.logging import get_logger
 
 # Module logger
@@ -150,7 +152,7 @@ class FileManager:
                 str(file_path)
             ]
             
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = run_command(cmd)
             if result.returncode != 0:
                 return CodecCheckResult(
                     codec=None,

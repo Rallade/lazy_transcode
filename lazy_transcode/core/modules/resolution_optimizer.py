@@ -22,7 +22,7 @@ from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import dataclass
 import math
 
-from .media_utils import ffprobe_field
+from .media_utils import ffprobe_field, get_video_dimensions
 from ...utils.logging import get_logger
 
 logger = get_logger()
@@ -122,14 +122,8 @@ class ResolutionOptimizer:
         """
         cache_key = str(video_path)
         if cache_key not in self.resolution_cache:
-            try:
-                width = int(ffprobe_field(video_path, 'width') or 1920)
-                height = int(ffprobe_field(video_path, 'height') or 1080)
-                self.resolution_cache[cache_key] = (width, height)
-            except (ValueError, TypeError):
-                # Default to 1080p if detection fails
-                width, height = 1920, 1080
-                self.resolution_cache[cache_key] = (width, height)
+            width, height = get_video_dimensions(video_path)
+            self.resolution_cache[cache_key] = (width, height)
         else:
             width, height = self.resolution_cache[cache_key]
         

@@ -34,8 +34,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import List, Tuple, Optional, Dict
 
-from .system_utils import TEMP_FILES, DEBUG, format_size
-from .media_utils import get_duration_sec, compute_vmaf_score, ffprobe_field, ffprobe_field
+from .system_utils import TEMP_FILES, DEBUG, format_size, temporary_file, run_command
+from .media_utils import get_duration_sec, compute_vmaf_score, ffprobe_field, get_video_dimensions
 from .quality_rate_predictor import get_quality_rate_predictor
 from .content_analyzer import get_content_analyzer
 from .resolution_optimizer import get_resolution_optimizer
@@ -91,7 +91,7 @@ def run_ffmpeg_with_progress(cmd: List[str], duration: Optional[float] = None, o
             progress_cmd.insert(ffmpeg_idx + 3, '-nostats')
         except StopIteration:
             # Fallback to regular execution
-            return subprocess.run(cmd, capture_output=True, text=True)
+            return run_command(cmd)
         
         # Start process with progress monitoring
         with tqdm(total=100, desc=f"[{operation}]", unit="%", position=0) as pbar:
@@ -149,7 +149,7 @@ def run_ffmpeg_with_progress(cmd: List[str], duration: Optional[float] = None, o
             )
     else:
         # For short operations, just run normally
-        return subprocess.run(cmd, capture_output=True, text=True)
+        return run_command(cmd)
 
 
 def get_video_duration(file_path: Path) -> float:
@@ -176,7 +176,7 @@ def extract_single_clip(infile: Path, start_time: int, clip_duration: int, clip_
     ]
     
     try:
-        result = subprocess.run(extract_cmd, capture_output=True, text=True, timeout=30)
+        result = run_command(extract_cmd, timeout=30)
         if result.returncode == 0 and clip_path.exists():
             return clip_path, None
         else:
@@ -523,8 +523,7 @@ def get_intelligent_bounds(infile: Path, target_vmaf: float, preset: str,
     
     # Get video properties for smarter initial bounds
     try:
-        width = int(ffprobe_field(infile, "width") or "1920")
-        height = int(ffprobe_field(infile, "height") or "1080")
+        width, height = get_video_dimensions(infile)
         fps_str = ffprobe_field(infile, "r_frame_rate") or "24"
         if '/' in fps_str:
             num, den = fps_str.split('/')
@@ -795,11 +794,7 @@ def build_vbr_encode_cmd(infile: Path, outfile: Path, encoder: str, encoder_type
     builder = EncoderConfigBuilder()
     
     # Get video dimensions for proper encoding
-    try:
-        width = int(ffprobe_field(infile, "width") or "1920")
-        height = int(ffprobe_field(infile, "height") or "1080")
-    except (ValueError, TypeError):
-        width, height = 1920, 1080  # Fallback
+    width, height = get_video_dimensions(infile)
     
     # Determine threading based on encoder type
     threads = 4 if encoder_type == "hardware" else None  # Let x265 auto-decide for CPU
@@ -820,10 +815,10 @@ def calculate_intelligent_vbr_bounds(infile: Path, target_vmaf: float, expand_fa
     
     # Get source file bitrate
     try:
-        result = subprocess.run([
+        result = run_command([
             "ffprobe", "-v", "error", "-select_streams", "v:0", 
             "-show_entries", "stream=bit_rate", "-of", "csv=p=0", str(infile)
-        ], capture_output=True, text=True, timeout=30)
+        ], timeout=30)
         
         if result.returncode == 0 and result.stdout.strip():
             source_bitrate_bps = int(result.stdout.strip())
@@ -844,8 +839,7 @@ def calculate_intelligent_vbr_bounds(infile: Path, target_vmaf: float, expand_fa
     
     # Get video properties for intelligent bounds
     try:
-        width = int(ffprobe_field(infile, "width") or "1920")
-        height = int(ffprobe_field(infile, "height") or "1080")
+        width, height = get_video_dimensions(infile)
         fps_str = ffprobe_field(infile, "r_frame_rate") or "24"
         if '/' in fps_str:
             num, den = fps_str.split('/')
@@ -1078,10 +1072,10 @@ def optimize_encoder_settings_vbr(infile: Path, encoder: str, encoder_type: str,
         logger.vbr(f"Source file: {source_size_gb:.2f}GB")
         
         # Get source bitrate for intelligent bounds calculation
-        result = subprocess.run([
+        result = run_command([
             "ffprobe", "-v", "error", "-select_streams", "v:0", 
             "-show_entries", "stream=bit_rate", "-of", "csv=p=0", str(infile)
-        ], capture_output=True, text=True, timeout=30)
+        ], timeout=30)
         
         if result.returncode == 0 and result.stdout.strip():
             source_bitrate_kbps = int(result.stdout.strip()) // 1000
@@ -2119,7 +2113,7 @@ def _test_vbr_encoding(infile: Path, encoder: str, encoder_type: str, bitrate_kb
         if DEBUG:
             print(f"[VBR-TEST-ENCODE] {' '.join(shlex.quote(c) for c in cmd)}")
         
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = run_command(cmd)
         success = result.returncode == 0 and test_output.exists()
         
         if not success and DEBUG:

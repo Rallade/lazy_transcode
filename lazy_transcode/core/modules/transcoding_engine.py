@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 from typing import List, Optional
 
-from .system_utils import DEBUG, get_next_transcoded_dir
+from .system_utils import DEBUG, get_next_transcoded_dir, run_command
 
 
 def detect_hdr_content(input_file: Path) -> bool:
@@ -38,7 +38,7 @@ def detect_hdr_content(input_file: Path) -> bool:
             "-select_streams", "v:0", str(input_file)
         ]
         
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        result = run_command(cmd, timeout=10)
         if result.returncode != 0:
             return False
             
@@ -147,6 +147,9 @@ def build_vbr_encode_cmd(input_file: Path, output_file: Path, encoder: str, enco
     # Input  
     cmd.extend(["-i", str(input_file)])
     
+    # CRITICAL FIX: Only apply HDR metadata if source is actually HDR
+    apply_hdr = preserve_hdr_metadata and detect_hdr_content(input_file)
+    
     # Video encoding
     cmd.extend(["-c:v", encoder])
     
@@ -155,25 +158,25 @@ def build_vbr_encode_cmd(input_file: Path, output_file: Path, encoder: str, enco
         if "nvenc" in encoder:
             cmd.extend(["-preset", "slow", "-rc", "vbr", "-maxrate", f"{max_bitrate}k", 
                        "-b:v", f"{avg_bitrate}k", "-bufsize", f"{max_bitrate * 2}k"])
-            if preserve_hdr_metadata:
+            if apply_hdr:
                 cmd.extend(["-colorspace", "bt2020nc", "-color_primaries", "bt2020", 
                            "-color_trc", "smpte2084"])
         elif "amf" in encoder:
             cmd.extend(["-usage", "transcoding", "-rc", "vbr_peak", "-b:v", f"{avg_bitrate}k",
                        "-maxrate", f"{max_bitrate}k", "-bufsize", f"{max_bitrate * 2}k"])
-            if preserve_hdr_metadata:
+            if apply_hdr:
                 cmd.extend(["-colorspace", "bt2020nc", "-color_primaries", "bt2020", 
                            "-color_trc", "smpte2084"])
         elif "videotoolbox" in encoder:
             cmd.extend(["-b:v", f"{avg_bitrate}k", "-maxrate", f"{max_bitrate}k",
                        "-bufsize", f"{max_bitrate * 2}k"])
-            if preserve_hdr_metadata:
+            if apply_hdr:
                 cmd.extend(["-colorspace", "bt2020nc", "-color_primaries", "bt2020", 
                            "-color_trc", "smpte2084", "-color_range", "tv"])
         elif "qsv" in encoder:
             cmd.extend(["-preset", "veryslow", "-b:v", f"{avg_bitrate}k", 
                        "-maxrate", f"{max_bitrate}k", "-bufsize", f"{max_bitrate * 2}k"])
-            if preserve_hdr_metadata:
+            if apply_hdr:
                 cmd.extend(["-colorspace", "bt2020nc", "-color_primaries", "bt2020", 
                            "-color_trc", "smpte2084"])
     else:
@@ -183,7 +186,7 @@ def build_vbr_encode_cmd(input_file: Path, output_file: Path, encoder: str, enco
         
         # x265 specific parameters
         x265_params = ["rd=6"]
-        if preserve_hdr_metadata:
+        if apply_hdr:
             x265_params.extend([
                 "colorprim=bt2020",
                 "transfer=smpte2084",
@@ -341,8 +344,7 @@ def get_encoder_list() -> List[str]:
     """Get list of available encoders."""
     # Run ffmpeg -encoders and parse output
     try:
-        result = subprocess.run(['ffmpeg', '-hide_banner', '-encoders'], 
-                              capture_output=True, text=True)
+        result = run_command(['ffmpeg', '-hide_banner', '-encoders'])
         if result.returncode != 0:
             return []
             

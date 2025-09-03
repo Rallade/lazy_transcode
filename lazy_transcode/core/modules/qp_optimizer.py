@@ -18,7 +18,7 @@ from typing import List, Tuple, Optional, Dict
 from tqdm import tqdm
 
 from .media_utils import get_duration_sec, compute_vmaf_score
-from .system_utils import TEMP_FILES, DEBUG
+from .system_utils import TEMP_FILES, DEBUG, run_command
 from .transcoding_engine import build_encode_cmd
 from .vbr_optimizer import warn_hardware_encoder_inefficiency
 
@@ -73,7 +73,7 @@ def extract_random_clips(file: Path, num_clips: int, clip_duration: int = 120) -
         if DEBUG:
             print(f"[SAMPLE-EXTRACT] {' '.join(shlex.quote(c) for c in extract_cmd)}")
         
-        result = subprocess.run(extract_cmd, capture_output=True, text=True)
+        result = run_command(extract_cmd)
         if result.returncode == 0 and clip_path.exists():
             clips.append(clip_path)
         else:
@@ -120,7 +120,7 @@ def test_qp_on_sample(file: Path, qp: int, encoder: str, encoder_type: str,
             
             if DEBUG:
                 print("[SAMPLE-EXTRACT] " + " ".join(shlex.quote(c) for c in extract_cmd))
-            result = subprocess.run(extract_cmd, capture_output=True, text=True)
+            result = run_command(extract_cmd)
             if result.returncode != 0:
                 if DEBUG:
                     print("[DEBUG] sample extract stderr:\n" + result.stderr)
@@ -145,7 +145,7 @@ def test_qp_on_sample(file: Path, qp: int, encoder: str, encoder_type: str,
         else:
             print(f"    -> Encoding QP{qp}...", end="", flush=True)
         
-        result = subprocess.run(encode_cmd, capture_output=True, text=True)
+        result = run_command(encode_cmd)
         if result.returncode != 0:
             if not DEBUG:
                 print(" FAILED")

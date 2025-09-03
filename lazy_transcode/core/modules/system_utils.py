@@ -16,6 +16,8 @@ import atexit
 import subprocess
 import threading
 import time
+import tempfile
+import contextlib
 from pathlib import Path
 
 from ...utils.logging import get_logger
@@ -65,6 +67,78 @@ def format_size(bytes_size: int) -> str:
             return f"{size:.1f} {unit}"
         size /= 1024.0
     return f"{size:.1f} PB"
+
+
+def run_command(cmd: list[str], timeout: int = 30, capture_output: bool = True,
+                text: bool = True, check: bool = False) -> subprocess.CompletedProcess:
+    """
+    Standardized subprocess command runner with consistent error handling.
+    
+    Args:
+        cmd: Command as list of strings
+        timeout: Timeout in seconds (default: 30)
+        capture_output: Whether to capture stdout/stderr (default: True)  
+        text: Whether to use text mode (default: True)
+        check: Whether to raise exception on non-zero exit (default: False)
+    
+    Returns:
+        CompletedProcess object
+    """
+    try:
+        return subprocess.run(
+            cmd, 
+            capture_output=capture_output,
+            text=text,
+            timeout=timeout,
+            check=check
+        )
+    except subprocess.TimeoutExpired:
+        logger.error(f"Command timed out after {timeout}s: {' '.join(cmd[:3])}...")
+        raise
+    except subprocess.CalledProcessError as e:
+        if DEBUG:
+            logger.error(f"Command failed: {' '.join(cmd[:3])}... (exit code: {e.returncode})")
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error running command: {e}")
+        raise
+
+
+@contextlib.contextmanager
+def temporary_file(suffix: str = ".tmp", prefix: str = "lazy_transcode_"):
+    """
+    Context manager for temporary files with automatic cleanup.
+    
+    Ensures temp files are tracked in TEMP_FILES and cleaned up properly.
+    
+    Args:
+        suffix: File extension (default: .tmp)
+        prefix: Filename prefix (default: lazy_transcode_)
+        
+    Yields:
+        Path: Path to the temporary file
+    """
+    temp_file = None
+    try:
+        fd, temp_path = tempfile.mkstemp(suffix=suffix, prefix=prefix)
+        os.close(fd)  # Close the file descriptor, keep the path
+        temp_file = Path(temp_path)
+        
+        # Track in global temp files
+        TEMP_FILES.add(str(temp_file))
+        
+        yield temp_file
+        
+    finally:
+        if temp_file:
+            try:
+                if temp_file.exists():
+                    temp_file.unlink()
+            except Exception as e:
+                if DEBUG:
+                    logger.error(f"Failed to cleanup temp file {temp_file}: {e}")
+            finally:
+                TEMP_FILES.discard(str(temp_file))
 
 
 def get_next_transcoded_dir(base_path: Path) -> Path:

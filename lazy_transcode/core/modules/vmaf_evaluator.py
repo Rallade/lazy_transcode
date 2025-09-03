@@ -23,6 +23,8 @@ from typing import Dict, List, Optional, Set, Tuple, Union
 import threading
 import time
 
+from .system_utils import run_command
+
 
 @dataclass
 class VMAfResult:
@@ -77,7 +79,7 @@ class VMAfEvaluator:
         if self.debug:
             print("[SAMPLE-EXTRACT] " + " ".join(shlex.quote(c) for c in extract_cmd))
             
-        result = subprocess.run(extract_cmd, capture_output=True, text=True)
+        result = run_command(extract_cmd)
         if result.returncode != 0:
             if self.debug:
                 print("[DEBUG] sample extract stderr:\n" + result.stderr)
@@ -100,7 +102,7 @@ class VMAfEvaluator:
                 "-c", "copy", str(clip_path)
             ]
             
-            result = subprocess.run(ref_cmd, capture_output=True, text=True)
+            result = run_command(ref_cmd)
             if result.returncode == 0 and clip_path.exists():
                 clips.append(ClipInfo(
                     path=clip_path,
@@ -164,7 +166,7 @@ class VMAfEvaluator:
                 # Provide feedback during encoding
                 print(f"    -> Encoding QP{qp}...", end="", flush=True)
             
-            result = subprocess.run(encode_cmd, capture_output=True, text=True)
+            result = run_command(encode_cmd)
             if result.returncode != 0:
                 if not self.debug:
                     print(" FAILED")
@@ -245,7 +247,7 @@ class VMAfEvaluator:
                         raise ValueError("vbr_encode_cmd_builder is required")
                     
                     # Run encoding (silent)
-                    result = subprocess.run(cmd, capture_output=True, text=True)
+                    result = run_command(cmd)
                     if result.returncode != 0 or not clip_enc.exists():
                         if self.debug:
                             print(f"[DEBUG] VBR encoding failed for clip {i}: {result.stderr}")
@@ -371,7 +373,7 @@ class VMAfEvaluator:
         if enable_cpu_monitoring:
             self._cpu_monitor, self._cpu_stop_event = self._start_cpu_monitor()
         
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = run_command(cmd)
         
         # Stop CPU monitoring
         if enable_cpu_monitoring and self._cpu_monitor and self._cpu_stop_event:
@@ -399,7 +401,7 @@ class VMAfEvaluator:
         try:
             cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", 
                    "-of", "default=nk=1:nw=1", str(file)]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            result = run_command(cmd, timeout=30)
             if result.returncode == 0 and result.stdout.strip():
                 return float(result.stdout.strip())
         except Exception:
@@ -414,7 +416,7 @@ class VMAfEvaluator:
                 "-show_entries", "stream=width,height", 
                 "-of", "csv=s=x:p=0", str(video_path)
             ]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            result = run_command(cmd, timeout=10)
             if result.returncode == 0 and result.stdout.strip():
                 width, height = map(int, result.stdout.strip().split('x'))
                 return width, height
@@ -442,7 +444,7 @@ class VMAfEvaluator:
             if self.debug:
                 print(f"[VMAF] Creating scaled reference: {target_width}x{target_height}")
             
-            result = subprocess.run(scale_cmd, capture_output=True, text=True, timeout=300)
+            result = run_command(scale_cmd, timeout=300)
             if result.returncode == 0 and temp_scaled.exists():
                 return temp_scaled
             else:

@@ -21,7 +21,7 @@ from functools import lru_cache
 from typing import Optional, Tuple
 from tqdm import tqdm
 
-from .system_utils import TEMP_FILES, DEBUG, start_cpu_monitor
+from .system_utils import TEMP_FILES, DEBUG, start_cpu_monitor, run_command
 
 
 @lru_cache(maxsize=1024)
@@ -35,6 +35,26 @@ def ffprobe_field(file: Path, key: str) -> str | None:
         return out if out and out != "unknown" else None
     except subprocess.CalledProcessError:
         return None
+
+
+@lru_cache(maxsize=1024)
+def get_video_dimensions(file: Path) -> tuple[int, int]:
+    """
+    Get video dimensions (width, height) using ffprobe.
+    
+    Returns:
+        tuple[int, int]: (width, height) with fallback to (1920, 1080)
+    """
+    try:
+        width_str = ffprobe_field(file, "width")
+        height_str = ffprobe_field(file, "height")
+        
+        width = int(width_str) if width_str and width_str.isdigit() else 1920
+        height = int(height_str) if height_str and height_str.isdigit() else 1080
+        
+        return width, height
+    except (ValueError, TypeError):
+        return 1920, 1080
 
 
 @lru_cache(maxsize=4096)
@@ -79,8 +99,7 @@ def should_skip_codec(codec: str | None) -> bool:
 def detect_hevc_encoder() -> tuple[str, str]:
     """Detect available HEVC encoder. Returns (encoder_name, encoder_type)"""
     try:
-        result = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"], 
-                              capture_output=True, text=True, check=True)
+        result = run_command(["ffmpeg", "-hide_banner", "-encoders"], check=True)
         encoders = result.stdout.lower()
         
         # Check in order of preference: AMD -> NVIDIA -> Intel -> Software
@@ -136,7 +155,7 @@ def compute_vmaf_score(reference: Path, distorted: Path, n_threads: int = 0, ena
                 "-show_entries", "stream=width,height", 
                 "-of", "csv=s=x:p=0", str(video_path)
             ]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            result = run_command(cmd, timeout=10)
             if result.returncode == 0 and result.stdout.strip():
                 width, height = map(int, result.stdout.strip().split('x'))
                 return width, height
@@ -164,7 +183,7 @@ def compute_vmaf_score(reference: Path, distorted: Path, n_threads: int = 0, ena
             if DEBUG:
                 logger.vmaf(f"Creating scaled reference: {target_width}x{target_height}")
             
-            result = subprocess.run(scale_cmd, capture_output=True, text=True, timeout=300)
+            result = run_command(scale_cmd, timeout=300)
             if result.returncode == 0 and temp_scaled.exists():
                 return temp_scaled
             else:
@@ -207,7 +226,7 @@ def compute_vmaf_score(reference: Path, distorted: Path, n_threads: int = 0, ena
         if enable_cpu_monitoring:
             cpu_monitor, cpu_stop_event = start_cpu_monitor()
         
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = run_command(cmd)
         
         # Stop CPU monitoring
         if cpu_monitor and cpu_stop_event:
@@ -336,7 +355,7 @@ def compute_vmaf_score_multiprocess(reference: Path, distorted: Path, n_threads:
             "-of", "default=noprint_wrappers=1:nokey=1", str(reference)
         ]
         
-        result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=30)
+        result = run_command(probe_cmd, timeout=30)
         if result.returncode != 0:
             # Fall back to standard method if probe fails
             return compute_vmaf_score(reference, distorted, n_threads=n_threads)

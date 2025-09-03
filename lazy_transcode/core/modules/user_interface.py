@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 from typing import List
 
-from .system_utils import format_size
+from .system_utils import format_size, run_command
 from .media_utils import get_duration_sec, compute_vmaf_score, should_skip_codec
 
 
@@ -68,14 +68,14 @@ def verify_and_prompt_transcode(files: List[Path], optimal_qp: int, encoder: str
                 "-ss", str(start_time), "-i", str(f), "-t", str(sample_duration),
                 "-c", "copy", str(sample_file)
             ]
-            result = subprocess.run(extract_cmd, capture_output=True)
+            result = run_command(extract_cmd)
             
             if result.returncode == 0 and sample_file.exists():
                 # Encode sample
                 from .transcoding_engine import build_encode_cmd
                 encode_cmd = build_encode_cmd(sample_file, encoded_sample, encoder, 
                                             encoder_type, optimal_qp, preserve_hdr)
-                result = subprocess.run(encode_cmd, capture_output=True)
+                result = run_command(encode_cmd)
                 
                 if result.returncode == 0 and encoded_sample.exists():
                     # Compute VMAF
