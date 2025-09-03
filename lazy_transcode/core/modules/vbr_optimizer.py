@@ -32,7 +32,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import List, Tuple, Optional, Dict
+from typing import List, Tuple, Optional, Dict, Any, Union
 
 from .system_utils import TEMP_FILES, DEBUG, format_size, temporary_file, run_command
 from .media_utils import get_duration_sec, compute_vmaf_score, ffprobe_field, get_video_dimensions
@@ -2129,3 +2129,53 @@ def _test_vbr_encoding(infile: Path, encoder: str, encoder_type: str, bitrate_kb
                 TEMP_FILES.discard(str(test_output))
             except:
                 pass
+
+
+def optimize_vbr_with_gradient_methods(infile: Path, outfile: Path, target_vmaf: float,
+                                     encoder: str, encoder_type: str, preserve_hdr: bool = False,
+                                     methods: Optional[List[str]] = None) -> Dict[str, Any]:
+    """
+    Optimize VBR encoding using gradient-based methods and compare with bisection.
+    
+    This function integrates the new gradient-based optimization techniques from the
+    research paper with the existing bisection search method for comparison.
+    
+    Args:
+        infile: Source video file
+        outfile: Target output file path
+        target_vmaf: Target VMAF score
+        encoder: Video encoder to use
+        encoder_type: "software" or "hardware"  
+        preserve_hdr: Whether to preserve HDR metadata
+        methods: List of optimization methods to compare
+                 ["gradient-descent", "quasi-newton", "conjugate-gradient", "bisection"]
+    
+    Returns:
+        Dict with comparison results for all methods
+    """
+    # Import the gradient optimizer
+    from .gradient_optimizer import compare_optimization_methods
+    
+    if methods is None:
+        methods = ["gradient-descent", "quasi-newton", "conjugate-gradient", "bisection"]
+    
+    logger.info(f"Starting gradient-based VBR optimization comparison")
+    logger.info(f"Methods: {', '.join(methods)}")
+    logger.info(f"Target VMAF: {target_vmaf:.1f}")
+    
+    # Run the comparison
+    results = compare_optimization_methods(
+        infile, outfile, target_vmaf, encoder, encoder_type, preserve_hdr, methods
+    )
+    
+    # Add summary information
+    results['_summary'] = {
+        'total_methods': len(methods),
+        'successful_methods': len([r for r in results.values() if hasattr(r, 'success') and r.success]),
+        'target_vmaf': target_vmaf,
+        'source_file': str(infile),
+        'encoder': encoder,
+        'encoder_type': encoder_type
+    }
+    
+    return results

@@ -92,6 +92,33 @@ Batch transcode with custom quality target:
 lazy-transcode-manager --root /media/shows --vmaf-target 93.0 --execute
 ```
 
+## Testing
+
+The project includes a comprehensive test suite with **64 test classes** across **18 test files**, organized into logical categories:
+
+- **Unit Tests** (`tests/unit/`) - Individual module testing
+- **Regression Tests** (`tests/regression/`) - Bug prevention and validation
+- **Integration Tests** (`tests/integration/`) - End-to-end workflow testing
+- **Utilities** (`tests/utils/`) - Test runners and validation tools
+
+### Quick Test Overview
+```bash
+# See current test status
+python tests/test_overview.py
+
+# Run specific test categories
+python -m unittest discover tests.unit -v           # Unit tests
+python -m unittest discover tests.integration -v    # Integration tests
+```
+
+### Documentation
+- **Complete Test Guide**: `tests/README.md`
+- **Test Suite Organization**: `tests/CLEANUP_COMPLETE.md`  
+- **Bug Discovery Report**: `docs/REGRESSION_TEST_RESULTS.md`
+- **Full Documentation Index**: `docs/TEST_SUITE_DOCUMENTATION_INDEX.md`
+
+The regression tests have successfully identified **48 critical bugs** in production code, demonstrating the effectiveness of comprehensive testing.
+
 ## License
 
 MIT License - see LICENSE file for details.

@@ -88,14 +88,112 @@ def process_vbr_mode(args, encoder: str, encoder_type: str, files: List[Path]) -
         clip_positions = get_vbr_clip_positions(duration, vbr_clips)
         
         # Run VBR optimization
-        result = optimize_encoder_settings_vbr(
-            file, encoder, encoder_type,
-            target_vmaf=args.vmaf_target,
-            vmaf_tolerance=args.vmaf_tol,
-            clip_positions=clip_positions,
-            clip_duration=args.vbr_clip_duration,
-            max_safety_limit=args.vbr_max_trials
-        )
+        if args.vbr_method == "compare":
+            # Compare all optimization methods
+            from .modules.vbr_optimizer import optimize_vbr_with_gradient_methods
+            
+            logger.vbr("Running optimization method comparison")
+            comparison_results = optimize_vbr_with_gradient_methods(
+                file, file.with_suffix('.hevc.mkv'), args.vmaf_target,
+                encoder, encoder_type, args.preserve_hdr,
+                methods=["gradient-descent", "quasi-newton", "conjugate-gradient", "bisection"]
+            )
+            
+            # Find the best method result
+            successful_methods = {k: v for k, v in comparison_results.items() 
+                                if hasattr(v, 'success') and v.success}
+            
+            if successful_methods:
+                # Choose best method by accuracy (closest to target VMAF)
+                best_method = min(successful_methods.items(), 
+                                key=lambda x: abs(x[1].vmaf_score - args.vmaf_target) 
+                                if x[1].vmaf_score else 999)
+                
+                method_name, best_result = best_method
+                
+                # Convert to expected result format
+                result = {
+                    'success': best_result.success,
+                    'bitrate': best_result.bitrate,
+                    'vmaf_score': best_result.vmaf_score,
+                    'preset': best_result.preset or 'medium',
+                    'bf': best_result.bf or 3,
+                    'refs': best_result.refs or 3,
+                    'filesize': best_result.filesize,
+                    'method_used': best_result.method_used,
+                    'convergence_time': best_result.convergence_time,
+                    'iterations': best_result.iterations
+                }
+                
+                logger.vbr(f"Best method: {method_name.upper()} - "
+                          f"{result['bitrate']}kbps, VMAF {result['vmaf_score']:.2f}")
+                
+                # Log comparison summary
+                logger.vbr("Method comparison results:")
+                for method, res in successful_methods.items():
+                    logger.vbr(f"  {method}: {res.bitrate}kbps, VMAF {res.vmaf_score:.2f}, "
+                              f"{res.iterations} iter, {res.convergence_time:.1f}s")
+            else:
+                logger.vbr("All optimization methods failed, falling back to standard VBR")
+                result = optimize_encoder_settings_vbr(
+                    file, encoder, encoder_type,
+                    target_vmaf=args.vmaf_target,
+                    vmaf_tolerance=args.vmaf_tol,
+                    clip_positions=clip_positions,
+                    clip_duration=args.vbr_clip_duration,
+                    max_safety_limit=args.vbr_max_trials
+                )
+                
+        elif args.vbr_method in ["gradient-descent", "quasi-newton", "conjugate-gradient"]:
+            # Use specific gradient method
+            from .modules.vbr_optimizer import optimize_vbr_with_gradient_methods
+            
+            logger.vbr(f"Using {args.vbr_method} optimization method")
+            comparison_results = optimize_vbr_with_gradient_methods(
+                file, file.with_suffix('.hevc.mkv'), args.vmaf_target,
+                encoder, encoder_type, args.preserve_hdr,
+                methods=[args.vbr_method]
+            )
+            
+            if args.vbr_method in comparison_results and comparison_results[args.vbr_method].success:
+                grad_result = comparison_results[args.vbr_method]
+                
+                # Convert to expected result format
+                result = {
+                    'success': grad_result.success,
+                    'bitrate': grad_result.bitrate,
+                    'vmaf_score': grad_result.vmaf_score,
+                    'preset': grad_result.preset or 'medium',
+                    'bf': grad_result.bf or 3,
+                    'refs': grad_result.refs or 3,
+                    'filesize': grad_result.filesize,
+                    'method_used': grad_result.method_used,
+                    'convergence_time': grad_result.convergence_time,
+                    'iterations': grad_result.iterations
+                }
+                
+                logger.vbr(f"{args.vbr_method.upper()} result: {result['bitrate']}kbps, "
+                          f"VMAF {result['vmaf_score']:.2f}")
+            else:
+                logger.vbr(f"{args.vbr_method} method failed, falling back to bisection")
+                result = optimize_encoder_settings_vbr(
+                    file, encoder, encoder_type,
+                    target_vmaf=args.vmaf_target,
+                    vmaf_tolerance=args.vmaf_tol,
+                    clip_positions=clip_positions,
+                    clip_duration=args.vbr_clip_duration,
+                    max_safety_limit=args.vbr_max_trials
+                )
+        else:
+            # Use standard bisection method
+            result = optimize_encoder_settings_vbr(
+                file, encoder, encoder_type,
+                target_vmaf=args.vmaf_target,
+                vmaf_tolerance=args.vmaf_tol,
+                clip_positions=clip_positions,
+                clip_duration=args.vbr_clip_duration,
+                max_safety_limit=args.vbr_max_trials
+            )
         
         if result.get('success', False):
             vbr_results[file] = result
@@ -205,6 +303,9 @@ def main():
                        help="Duration of each VBR test clip in seconds (default: 60)")
     parser.add_argument("--vbr-max-trials", type=int, default=8,
                        help="Base maximum VBR trials - system adapts based on convergence (default: 8)")
+    parser.add_argument("--vbr-method", choices=["bisection", "gradient-descent", "quasi-newton", "conjugate-gradient", "compare"],
+                       default="bisection", 
+                       help="VBR optimization method: bisection (classic), gradient methods (research-based), or compare all (default: bisection)")
     
     # Encoder settings
     parser.add_argument("--encoder", choices=["cpu", "nvenc", "amf", "qsv", "videotoolbox"],

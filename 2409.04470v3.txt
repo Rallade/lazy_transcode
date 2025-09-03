@@ -1,0 +1,983 @@
+Comparative Analysis of Gradient-Based Optimization
+Techniques Using Multidimensional Surface 3D Visualizations and Initial Point Sensitivity
+Saeed Asadi1, Sonia Gharibzadeh2, Hajar Kazemi Naeini1, Masoud Reihanifar3,4, Morteza
+Rahimi5,*, Shiva Zangeneh6, Aseel Smerat 7, Lazim Abdullah 8
+1 Department of Civil Engineering, The University of Texas at Arlington, Arlington, Texas, USA
+2 Department of Computer Engineering, South Tehran Branch, Islamic Azad University, Tehran, Iran
+3 Department of Civil and Environmental Engineering, University of California at Berkeley, Berkeley, CA, USA
+4 Department of Civil and Environmental Engineering, BarcelonaTech, Technical University of Catalonia (UPC),
+Barcelona, Spain
+5 School of Computing and Information Sciences, Florida International University, Miami, FL, USA
+6 Faculty of Engineering, University of Malayer, Malayer, Iran
+7 Hourani Center for Applied Scientific Research, Al-Ahliyya Amman University, Amman 19328, Jordan
+8 Faculty of Ocean Engineering Technology and Informatics, Universiti Malaysia Terengganu (UMT), Kuala Nerus, 21030, Malaysia
+* Correspondence: mrahi011@fiu.edu
+
+Abstract: This study examines several renowned gradient-based optimization techniques and focuses
+on their computational efficiency and precision. In the study, the steepest descent, conjugate gradient
+(Fletcher-Reeves and Polak-Ribiere variants), Newton-Raphson, quasi-Newton (BFGS), and LevenbergMarquardt techniques were evaluated. These methods were benchmarked using Rosenbrock's, Spring
+Force Vanderplaats', Ackley's, and Himmelblau's functions. We emphasize the critical role that initial
+point selection plays in optimizing optimization outcomes in our analysis. It is also important to distinguish between local and global optima since gradient-based methods may have difficulties dealing with
+nonlinearity and multimodality. We illustrate optimization trajectories using 3D surface visualizations
+in order to help with optimization selection and algorithm technique. While gradient-based methods
+have been demonstrated to be effective, they may be limited by computational constraints and by the
+nature of the objective functions, necessitating the use of heuristic and metaheuristic algorithms in more
+complex situations.
+Keywords: Gradient-based Methods, Computational Optimization, Sensitivity to Initial Points, 3D Visualization, Objective Functions.
+
+1. Introduction
+Optimization seeks the best feasible engineering design by minimizing or maximizing an objective
+function. At the same time, mathematical techniques satisfy physical and mathematical design restrictions. The coupling of finite-element analysis with analytical solutions resulted in an optimal design
+of the now-classic three-bar truss example in the first study of numerical structural optimization [1]. By
+
+the late 1990s, significant advancements had been made, as illustrated in the study of Vanderplaats [2],
+and structural and interdisciplinary design optimization had become a mainstay in aerospace and mechanical engineering. It is also evidenced by the release of crucial design optimization published sources
+[2-4], which are still relevant today. There are two types of numerical optimization methods: gradientbased and non-gradient algorithms. Gradient-based algorithms frequently result in a local best. Nongradient algorithms converge to a global optimum in most cases, although they need many function
+tests. Non-gradient algorithms are less appropriate for large-scale issues, such as those found in engineering design. In addition to function evaluations, gradient-based algorithms require gradient or sensitivity information to generate appropriate search directions for improved designs during optimization
+rounds. The objective and constraint functions are frequently referred to as measuring performance in
+optimization issues. The phrases sensitivity, sensitivity coefficient, and gradient are used to describe the
+rate of change in a performance measure concerning a change in the design variable[5]. They offer gradient-based optimization and expose crucial design information to assist designers in enhancing designs in just one or two design rounds. Gradient-based algorithms may be divided into two general
+types. The first-order approaches, for example, just need the derivative information.
+On the other hand, the second-order approaches require not just the derivative information but
+also the Hessian matrix. Gauss–Newton, Levenberg–Marquardt, sequential quadratic programming,
+and the limited memory Broyden Fletcher Goldfarb Shanno technique are examples of representative
+approaches [5]. Gradient-based algorithms have a solid mathematical foundation, as local minimum
+solutions need Karush–Kuhn–Tucker (KKT) criteria [6]. In some cases, they can also be necessary criteria
+(for example, if the goal function is convex and specified on a convex set). Because calculating KKT
+conditions directly is generally exceedingly time-consuming due to the nonlinear nature of the equations, effective methods instead try to reduce the objective function value step by step. Line search and
+trust region approaches are the most extensively used methods for unconstrained optimization. SQP,
+penalty, and projection methods can be used for more intricate restricted optimization [7]. Duality theory may be a powerful tool by modifying the primal issue in the dual space; the related dual function
+is always concave, and the dual problem is sometimes considerably easier to solve. However, all of these
+techniques need the gradient of a function concerning its variables. The existence of an analytical version of the gradient is not guaranteed, and it may be challenging to find. Due to the increased number
+of objective function evaluations typical of structural optimizations, finite difference approximation of
+the gradient can be computationally expensive for simulation-based optimization. In this paper, we
+discuss classical gradient-based optimization methods. A comparison is made between the computing
+efficiency and accuracy of each of these methods. Moreover, evaluation is done based on the influence
+of the choice of the initial guess. Finally, the optimization process for different 3D surfaces is plotted
+
+and evaluated. This paper contributes thoroughly to the optimization methods via various key improvements. We outline the influence of initial points on the convergence behaviors of gradient-based optimization techniques, which offer valuable outcomes for robust and effective algorithm initialization.
+Our detailed comparative analyses show the relative efficiencies and precisions of selected optimization
+methods in complicated scenarios that involve multimodalities and non-linearities. Further, our study
+explores hybrid techniques that combine gradient-based approaches with heuristic algorithms to present specialized solutions for complex optimization challenges traditionally resistant to conventional
+techniques. We also illustrate the broad applicability of these methods across different functional domains. Finally, this research provides a deeper theoretical viewpoint of gradient-based optimization
+and improves its practical application to set an exhaustive foundation for future research exploration
+that can potentially bridge the gap between theoretical optimization strategies and their implementation
+in different industries.
+
+2. Literature Review
+Wu et al. [8] added an intentionally high variance of measurement errors at early iterations when
+utilizing the Gauss-Newton technique for automated history matching issues to dampen model parameter changes and avoid undershooting or overshooting. The standard Gauss-Newton and Levenberg–Marquardt techniques, according to Tan and Kalogerakis [9], require the computation of all sensitivity coefficients to formulate the Hessian matrix, which appears impossible due to a large number
+of unknown variables compared to the limited available dimensions. Researchers developed the
+quasi-Newton approach to solve this difficulty. This approach just requires the objective function's
+gradient, which may be calculated from a single adjoint solution, as Zhang et al. [10]. Chen et al. [11]
+presented a new line search technique, rescaled the hyperparameters, and added damping factors to
+the production data to increase the computational efficiency and resilience of the LBFGS approach.
+They also found that the new line search technique had to fulfill the robust Wolfe criteria at every
+iteration, or the convergence rate would drop dramatically. Recent studies have explored advanced
+approaches to secure communication, intelligent sensing, and interdisciplinary modeling. Key contributions include privacy-aware link scheduling in wireless networks [25], deep learning for enhanced
+scheduling efficiency [26], and decision-making frameworks for energy-efficient IoT service placement [27]. Innovations in perception systems include neuromorphic vision for real-time AR tracking
+[28] and codec modeling for adaptive streaming [29]. Educational applications have leveraged vestibular system simulations for STEM learning [30], while bio-inspired research has demonstrated highfrequency hearing via nonlinear bone conduction [31]. Collectively, these works highlight the growing
+impact of AI-driven, cross-disciplinary solutions in optimizing system performance across diverse
+
+domains. In transportation and sustainability, Cao et al. [32] used network flow models to reduce
+airport delays. Hussain et al. [33] and Danandeh Mehr et al. [34] applied advanced regression and
+evolutionary models to improve drought prediction. Reihanifar and Naimi [35] used value engineering to enhance the sustainability of road projects. The Karhunen–Loeve expansion can parameterize a
+numerical model in terms of a small number of independent random variables and deterministic eigenfunctions. Gradient-based techniques may be used with this development while still respecting
+the geological models' two-point statistics [12]. Sarma et al. [13] used a kernel principal component
+analysis method to model permeability fields to enhance current gradient-based history matching
+techniques to cope with complicated geological models defined by multiple-point geo-statistics. This
+approach can preserve arbitrary high-order statistics of random fields while maintaining reasonable
+processing needs, and it can simulate complicated geology. Recent studies highlight the growing use
+of AI in various domains. Mohammaddagha et al. [36] showed that neural network design and feature
+selection greatly impact transportation prediction accuracy. Naeini et al. [37] combined PINNs, digital
+twins, and blockchain to enhance energy efficiency in smart buildings. In media strategy, Lonbar et
+al. [38] applied fuzzy decision-making tools to manage risk and budget in advertising. Khamoushi
+[39] compared AI-based and traditional marketing, showing the benefits of personalization and predictive analytics. These works demonstrate AI’s potential in optimizing systems across industries.
+God et al. [14] suggested a stochastic optimization approach for finding Bayesian experimental designs
+that maximize the predicted information gainA review of some applications of gradient-based algorithms is illustrated in Table 1.
+Table I: review of gradient-based methods and their application
+Author
+
+Year
+
+Gradient-based
+
+Application
+
+Results
+
+Method
+A gradient-based solution framework is used to
+optimize these design variables using the ANN's
+back-propagation capability. The study proposes
+proposes an
+novel loss functions that incorporate all sampled
+A multi-point
+
+artificial neural
+
+synergistic gradient
+
+network ANN-
+
+evolution method
+
+based structural TO
+
+Wang et al.
+
+structural performances and topology awareness,
+2024
+
+[42]
+
+including a competitive mechanism-based loss
+function for achieving converged designs and a
+
+method
+population diversity-preserving strategy-based loss
+function for ensuring diverse and competitive
+outcomes.
+This algorithm
+gradient-based
+Ock et al.
+2024
+[43]
+
+GradNav's increased ability to escape deep energy
+employs a strategy
+
+navigation (GradNav)
+algorithm
+
+wells and reduced reliance on initial conditions is
+of initiating short
+simulation runs
+
+demonstrated by Langevin dynamics simulations in
+
+Müller-type PESs as well as molecular dynamics
+simulations of the Fs-peptide protein.
+Because the unbiased estimator works well with
+Unbiased multilevel
+Monte Carlo
+Goda et al.
+
+stochastic gradient descent techniques. They
+Optimization of
+
+proposed an optimization algorithm to find the best
+
+Bayesian
+2022
+
+Stochastic Gradient-
+
+[14]
+
+Bayesian experimental design. The suggested
+Experimental
+
+Based Optimization
+
+technique performs well for a basic test case and a
+Designs
+
+(UMLMC-SGBO)
+
+more realistic pharmacokinetics problem, according
+to numerical studies.
+Parameter
+
+enhanced metaphorAhmadianfar
+et al. [15]
+
+The findings showed that the suggested method can
+identification of
+
+2021
+
+free gradient-based
+
+photovoltaic
+
+optimizer (EGBO)
+
+derive
+
+optimum
+
+photovoltaic
+
+models'
+
+ideal
+
+parameters and may help model solar systems.
+systems
+Parameter
+
+Chaotic GradientPremkumar
+2021
+
+optimization of
+
+The findings demonstrated that the suggested
+
+photovoltaic
+
+CGBO algorithm outperformed the other methods.
+
+based optimizer
+
+et al. [16]
+(CGBO)
+
+systems
+These methods can adjust swiftly in volatile
+Gradient-Based
+Tuli et al.
+
+Optimization Strategy
+2021
+
+[17]
+
+contexts because of the co-simulation
+Optimization of
+
+backpropagation
+
+methodologies.
+
+and
+
+Experiments
+
+Fog Computing
+using Backpropagation
+
+utilizing real-world data on fog applications
+Environments
+
+of Input (GOBI)
+
+employing the GOBI approach have revealed a
+considerable reduction in energy use.
+The findings show that RLGBO can estimate model
+
+Random learning
+
+Design of
+
+parameters correctly under various environmental
+
+Gradient-based
+
+photovoltaic
+
+situations. The suggested RLGBO is intended to be
+
+optimizer (RLGBO)
+
+models
+
+a novel, trustworthy solution for evaluating essential
+
+Zhou et al.
+2021
+[18]
+
+parameters in solar models in general.
+It explores the solution space more comprehensively
+Real-time UAV
+Zhou et al.
+
+and
+
+outputs
+
+superior
+
+replanned
+
+trajectories.
+
+Path-Guided
+2020
+
+[20]
+
+Replanning
+
+Benchmark evaluation shows that our method
+
+Optimization (PGO)
+outplays state-of-the-art replanning success rate and
+optimality methods.
+Source
+Galerkin/Least-squares
+
+Albani et al.
+2020
+
+characterization of
+
+finite element
+
+[21]
+
+The resulting inversion tool is highly versatile and
+presents accurate results under different contexts
+
+airborne pollutant
+formulation
+
+with a competitive computational cost.
+emissions
+In a transonic aircraft wing design case, the results
+Massively
+show that the optimal design found by the proposed
+
+Li & Cai
+
+Surrogate-Assisted
+
+Multipoint
+
+Optimization
+
+Aerodynamic
+
+2020
+[22]
+
+method with 342 missions yields a fuel burn
+reduction by a factor of two as compared to a
+Shape Designing
+
+traditional multipoint optimal design. This work
+
+highlights the demand and provides an efficient way
+to conduct massively multipoint optimization in
+aircraft design
+
+De et al. [23]
+
+Stochastic
+
+2020
+
+Topology
+
+These investigations on two- and three-dimensional
+
+Optimization under
+
+structures illustrate the efficacy of the proposed
+
+Uncertainty
+
+stochastic gradient approach for TOuU applications.
+
+Optimization
+Since the surrogate model is valid in a large
+neighborhood and the gradients are sufficiently
+Parallel Gradientaccurate, the proposed technique can achieve the
+Adjoint-Sensitivity-
+
+Based EM
+
+Based Neuro-Transfer
+
+Optimization for
+
+Function Surrogate
+
+Microwave
+
+Feng et al.
+
+optimal EM solution faster than the existing
+2020
+
+[24]
+
+gradient-based surrogate optimization without
+adjoint sensitivity. Three examples of EM
+
+Components
+optimizations
+
+of
+
+microwave
+
+components
+
+demonstrate the proposed technique.
+Surrogate gradient approaches enable learning
+Neftci et al.
+
+Optimization of
+
+under
+
+various
+
+communication
+
+and
+
+storage
+
+spiking neural
+
+restrictions, making them particularly useful for
+
+network
+
+learning on tailored, low-power neuromorphic
+
+Surrogate gradient
+2019
+
+[19]
+
+learning (SGL)
+devices.
+
+All these gradient-based equations use Eq. (1) to plot the general direction of the iterative vector. The
+equation functions by adding a step 𝛼 in the d direction to the initial point. When the variables are defined, it plots a gradient descent towards the function’s local minimum [37].
+
+𝑥 𝑘+1 = 𝑥 𝑘 + 𝛼 𝑘 𝑑 𝑘+1
+
+(1)
+
+In the equation, 𝛼 (𝑘) shows the step size during the kth iteration, which is vital for the convergence
+behavior of the method. It is important to note that 𝛼 (𝑘) is dynamically calculated at each iteration to
+optimize the rate of convergence towards the function’s local minimum. The step size is determined based
+on various line search strategies that may include exact or inexact methods, aiming to meet specific criteria that reduce the objective function value effectively. This adaptive adjustment of 𝛼 (𝑘) is essential for
+navigating the complexities of the function's landscape, particularly when dealing with nonlinear or
+multi-modal functions.
+
+3. Method and Matrials
+3.1. Steepest Descent Method
+The steepest descent method is a first-order algorithm and the simplest gradient descent optimization method. It starts at an initial guess point x and then seeks the direction to travel using Eq. (2). The
+steps are always at a right angle, which means that the vector travels in a zig-zag pattern towards the
+desired value. It initially progresses quickly but slows down as it approaches its goal due to its rightangle travel.
+𝑑 𝑘+1 = −𝑈(𝑥 𝑘 )
+
+(2)
+
+While this is one of the most commonly used methods, it lacks a lot of efficiency and accuracy that
+other methods have. The Steepest Descent method works poorly for real-world models. They are not
+often well-conditioned enough for quick results. Furthermore, it is made to solve differential equations,
+which means that for non-differentials, the program would begin to function very poorly. Flaws aside,
+the method remains a cheap and easy process that can work fast in specific problems. It is one of the most
+straightforward gradient-based algorithms, reliant upon the negative gradient of the function at the current point. This technique is especially beneficial for its ease of implementation and simplicity but usually
+suffers from slow convergence, particularly near the minimum, where gradients become small. Our study
+indicates that while the steepest descent technique can efficiently navigate simple optimization problems,
+its performance degrades in high-dimensional and complex spaces where gradients do not point directly
+toward the global minimum. Our analysis of this approach shows the need for detailed step-size management to avoid extreme oscillation and poor convergence behavior.
+
+3.2. Conjugate Gradient Method
+The conjugate gradient method works similarly to Steepest Descent; however, it uses equation three
+to be able to so that it would not have to travel right angles. It does this by integrating the coefficient of
+conjugation 𝑦 𝑘 into the equation as shown above. As a result, it takes a more direct path and reaches the
+local minimum faster than the Steepest Descent method [38-40].
+𝑑 𝑘+1 = −𝑈(𝑥 𝑘 ) + 𝑦 𝑘 𝑑 𝑘−1
+
+(3)
+
+2
+
+𝑦𝑘 =
+
+||𝑈(𝑥 𝑘 )||
+
+2
+
+||𝑈(𝑥 𝑘−1 )||
+
+(4)
+
+𝑦𝑘 =
+
+[𝑈(𝑥 𝑘 )]𝑇 [𝑈(𝑥 𝑘 ) − 𝑈(𝑥 𝑘−1 )]
+||𝑈(𝑥 𝑘−1 )||
+
+2
+
+(5)
+
+It is also much more complicated to calculate than the Steepest Descent model because the coefficient
+of conjugation is not readily available for the method to use right away. As shown above, to find the
+conjunction coefficient for the graph, we had to use either the Fletcher-Reeves (4) or the Polack-Ribiere
+method (5). This technique enhances the steepest descent approach by developing conjugate directions,
+which ideally minimize the function in fewer iterations. This technique is more appropriate for largescale problems because of its reduced memory requirements compared to techniques utilizing Hessian
+matrices. Our study shows its robustness in handling sparse systems, as seen in the highly faster convergence rates compared to the steepest descent in our test cases. However, the performance is widely dependent on the accurate calculation of conjugation conditions, which if not maintained, can lead to suboptimal convergence.
+
+3.2. Levenberg-Marquardt Method
+The Levenberg-Marquardt method is a numerical method that takes significant steps on steep drops
+and smaller ones on flat functions. The Levenberg method uses Eq. (6) to consider the function’s curvature. The method uses the inverse Hessian Matrix 2 U(x k ) to read the curve and precisely follow along.
+The results are precise as well as quick compared to the Steepest Descent.
+
+𝑑 𝑘+1 = −
+
+𝑈(𝑥 𝑘 )
+2 𝑈(𝑥 𝑘 )
+
+(6)
+
+However, like the Steepest Descent method, it slows down as you approach, although less severely
+than the Steepest Descent. Furthermore, the function can overshoot the minimum point, leaving room for
+some errors for Levenberg. The steps to the process can be relatively slow since it has to plot the curvature
+to follow it better. As a result, the Levenberg-Marquardt method takes a long time to estimate the minimum and becomes very expensive. This method finds exact solutions quickly when the function is wellbehaved and the initial guess is close to the actual minimum. Our findings show that despite its high
+computational cost because of Hessian matrix calculations, the method substantially decreases the number of iterations needed to achieve convergence in nonlinear optimization problems. However, its efficiency reduces with poor scaling and non-convex functions, where Hessian calculations can become intractable.
+
+3.2. Newton’s Method
+Newton’s method, aka the Newton-Raphson method, is a numerical method with slow steps similar
+to the Steepest Descent however remains more effective. Newton’s method uses the Eq. (7) to take the
+curvature and slope into consideration. The method uses the Hessian Matrix H, as calculated in (8), a
+second-order matrix. The results are precise as well as quick compared to the Steepest Descent.
+
+𝑑 𝑘+1
+= −𝐻𝑈(𝑥 𝑘 )
+𝐻 = [2 𝑈(𝑥 𝑘 )]−1
+
+(7)
+
+(8)
+
+However, the steps remain huge and slow due to all the calculations that go into this, resulting in
+this method being very expensive. Not only does it have to plot out itself accurately, but it also must plot
+the Hessian Matrix in order to do so, which further increases the cost. The resulting program is costly and
+takes a long time to run, making it very inefficient to run extensive functions to search for the targeted
+point. Our experiments suggest that the Broyden-Fletcher-Goldfarb-Shanno algorithm is highly effective
+in medium to large-scale optimization problems, which offers a good compromise between convergence
+speed and iteration cost. Nevertheless, the success of BFGS hinges on a well-chosen initial approximation
+and can be sensitive to the accuracy of gradient estimates.
+
+3.3. Quasi-Newton’s Method
+To make the Newton-Raphson method cheaper and faster, the Quasi-Newton method took a slightly
+different approach. To do this, they approximate the Hessian Matrix using only first-order derivatives,
+so while it is slower on conversions, it is overall faster than the original. Eq. (7) is still used to calculate
+the direction; however, depending on the value of k, the Hessian Matrix is set equal to either (9) or (10),
+where I is the identity matrix starting from the Steepest Descent method.
+𝐻𝑘 = 𝐻𝑘−1 + 𝑀𝑘−1 +𝑁 𝑘−1 when k > 0
+𝐻𝑘 = 𝐼 𝑤ℎ𝑒𝑛 𝑘 = 0
+
+𝐻𝑘+1 = 𝐻𝑘 +
+
+𝑦 𝑘 (𝑦 𝑘 )𝑇 [𝐻]𝑘 𝑠 𝑘 (𝑠 𝑘 )𝑇 [𝐻]𝑘
+−
+(𝑦 𝑘 )𝑇 𝑠 𝑘
+(𝑠 𝑘 )𝑇 [𝐻]𝑘 𝑠 𝑘
+
+𝐻𝑘+1 = 𝐻𝑘 +
+
+𝑦 𝑘 (𝑦 𝑘 )𝑇
+(𝑦 𝑘 )𝑇 𝑠 𝑘
+[𝐻]𝑘 𝑦 𝑘 (𝑦 𝑘 )𝑇 [𝐻]𝑘
+−
+(𝑠 𝑘 )𝑇 [𝐻]𝑘 𝑠 𝑘
+
+(9)
+
+(10)
+
+(11)
+
+The first quasi method successfully developed was the DFP, which stands for the Davidson Fletcher Powell
+method. He had the idea to estimate the Hessian based on the gradient instead of calculating it, which lowered the
+cost. The approximated Hessian had to be symmetric, the gradient of the model had to equal the function’s gradient
+at xk and xk-1, displacement vector sk-q= xk-xk-1, and gradient change yk-1=U(xk)- U(xk-1), furthermore, the
+resulting matrixes should be as close as possible as shown in Eq. (10). To further optimize this method,
+the Brayden-Fletcher-Goldfarb-Shannon method Eq. (11) was developed to speed up the process. Rather
+than approximating the current point, they simplified the process by analyzing the inverse Hessian Matrix, which was faster. It remains the fastest gradient-based method and is less sensitive to step size choice
+than the others [41]. This technique is specifically valuable in applications like curve fitting and machine
+learning where the error landscape is typically non-linear. Our analysis shows that it provides stable
+convergence properties and is robust against poor initializations and ill-conditioned problems. However,
+the method requires tuning of its damping parameter to balance the trade-off between the descent direction and the step size, which can be challenging to optimize in practice
+
+4. Results And Discussion
+4.1. Problem Statement
+In this paper, we discuss classical gradient-based optimization methods. For testing and comparison
+of the gradient-based methods, we used four famous equations as follows:
+𝑓𝑅𝑜𝑠𝑒𝑛𝑏𝑟𝑜𝑐𝑘 (𝑥, 𝑦)
+= (𝑎 − 𝑥)2
+
+(12)
+
++ 𝑏(𝑦 − 𝑥 2 )2
+
+In mathematical optimization, the Rosenbrock function is a non-convex function used as a performance test problem for optimization algorithms. The global minimum is inside a long, narrow, parabolicshaped flat valley. To find the valley is trivial. To converge to the global minimum, however, is difficult.
+For this testing problem, 𝑎 = 1 and 𝑏 = 100 are considered.
+
+𝑓𝑆𝑝𝑟𝑖𝑛𝑔𝐹𝑜𝑟𝑐𝑒 (𝑥, 𝑦) =
+
+1
+𝑘 ( √𝑥 2 + (𝑙1 − 𝑦)2
+2 1
+
+− 𝑙1 )
+
+2
+
+1
++ 𝑘2 ( √𝑥 2 + (𝑙2 − 𝑦)2
+2
+
+(13)
+
+2
+
+− 𝑙2 ) − 𝑝1 𝑥 − 𝑝2 𝑦
+Vander Plaat's unconstrained minimization problem is a classic two-dimensional optimization problem. One response function has been chosen chiefly to illustrate how the metamodel assembly works. The
+
+objective is to find an equilibrium position of the springs by minimizing the total potential energy of the
+system. The constants 𝐾𝑖 are spring stiffnesses, 𝑃𝑖 are loads, 𝑙𝑖 are the original spring lengths, and 𝑥𝑖 are
+displacements. For this problem 𝐾1 = 8 N/cm, 𝐾2 = 1 N/cm, 𝑃1 = 𝑃2 = 5 N, 𝑙1 = 𝑙2 = 10 cm.
+
+𝑓𝐴𝑐𝑘𝑙𝑒𝑦 (𝑥, 𝑦) = −20𝑒
+−𝑒
+
+−0.02√
+
+𝑥 2 +𝑦 2
+2
+
+(14)
+
+𝑐𝑜𝑠(2𝜋𝑥)+𝑐𝑜𝑠(2𝜋𝑦)
+2
++𝑒
+
++ 20
+The Ackley function is a non-convex function used as a performance test problem for optimization
+algorithms in mathematical optimization. The Ackley function is widely used for testing optimization
+algorithms. Its two-dimensional form is characterized by a nearly flat outer region and a large hole at the
+center. The function poses a risk for optimization algorithms, particularly hill-climbing algorithms, to be
+trapped in one of its many local minima.
+
+𝑓𝐻𝑖𝑚𝑚𝑒𝑙𝑏𝑙𝑎𝑢 (𝑥, 𝑦) = 𝑓
+= (𝑥 2 + 𝑦 − 11)2
+2
+
+(15)
+
+2
+
++ (𝑥 + 𝑦 − 7)
+
+In mathematical optimization, Himmelblau's function is a multi-modal function used to test the performance of optimization algorithms. It has one local maximum at and where and four identical local
+minima. The locations of all the minima can be found analytically. However, because they are roots of
+cubic polynomials, the expressions are somewhat complicated when written in terms of radicals. The
+following minimization functions are tested using the classical gradient-based methods. The comparison
+is made with the computing efficiency and accuracy of each of these methods.
+
+4.2. Results of Optimization Methods
+In this paper, we used six gradient-based methods to optimize four famous minimization problems.
+The presented methods are the steepest descent, conjugate gradient methods of Fletcher-Reeves and Polak-Ribiere, Newton-Raphson, Quasi-newton (BFGS), and Levenberg-Marquardt methods. The optimization is done for Rosenbrock, Spring force Vanderplaats, Ackley, and Himmelblau's functions, which
+have been presented in the method section. Results of the minimization problem to find the nearest local
+minimum are illustrated in the following Figures 1 and 2.
+
+(a)
+
+(a)
+
+(b)
+
+Figure 1: The results of optimization of Rosenbrock function (a) 3D surface, (b), Contour plot
+
+(a)
+
+(b)
+
+Figure 2: The results of optimization of Rosenbrock function, (a) the Error value of distance to evaluate
+the position and final optimum point, (b) the value of function error based on the difference between
+the value of each iteration and final objective function value
+Figure 1 shows the surface and contour plot of the Rosenbrock function. The optimization environment includes 𝑥 ∈ [−2,2] and 𝑦 ∈ [−1,4]. The location of the local minimum for this interval is (𝑥𝑚 , 𝑦𝑚 ) = (1,1). Moreover, the initial search point is (𝑥0 , 𝑦0 ) = (−2,2). Based on the results of the optimization, the minimum point with
+a small error is (𝑥𝑝 , 𝑦𝑝 ) = (0.9992,0.9984). Regarding the error of the evaluation process for the x value that is
+shown in Figure 2 (a), it can be estimated that the greatest iteration or slowest method belongs to the LevenbergMarquart method with 2000 iterations to stop with 10−6 stopping criteria. Moreover, the second slow
+method is the steepest descent approach, with almost 400 process rounds. The error of the Rosenbrock
+function value is depicted in Figure 2(b). Based on the optimization process results, the presented algorithms see some fluctuation of tolerance in the optimum point that comes back to find the minimum.
+Regarding the finding of this paper based on Figure 2, the fastest method for the Rosenblock function
+problem is Newton-Raphson and BFGS algorithms.
+
+(a)
+
+(b)
+
+Figure 3. The results of optimization of Spring force function (a) 3D surface, (b), Contour plot
+
+(a)
+
+(b)
+
+Figure 4. The results of optimization of the Spring force function, (a) the Error value of distance to evaluate the position and final optimum point, (b) the value of function error based on the difference between the value of each iteration and final objective function value
+
+(a)
+
+(b)
+
+Figure 5. The results of optimization of Ackley function (a) 3D surface, (b), Contour plot
+
+(a)
+
+(b)
+
+Figure 6: The results of optimization of Ackley function, (a) the Error value of distance to evaluate the
+position and final optimum point, (b) the value of function error based on the difference between the
+value of each iteration and final objective function value
+The surface and contour plots of the Spring Force function are shown in Figure 3. The optimization
+environment includes x∈[-10,15] and y∈[-5,25]. The location of the local minimum for this interval is
+(x_m,y_m )=(7.623,17.626). Moreover, the initial search point is (x_0,y_0 )=(-1,1). The minimal point with
+a modest error is (x_p,y_p )=(7.626930,17.626331) based on the optimization findings. By calculating the
+error of the assessment process for the x value shown in Figure 4 (a), the steepest descent method has the
+most iterations or is the slowest method, with 31 iterations to stop with and 10-6 terminating criteria.
+Moreover, the conjugate gradient Polak-Riviere method, which has about ten rounds in the process, is
+
+the second slow method that can be applied. Figure 4(b) shows the error of the Spring Force function
+value.
+
+.
+(a)
+Figure 7.
+
+(b)
+
+The results of optimization of Himmelblau's function (a) 3D surface, (b), Contour plot
+
+(a)
+
+(b)
+
+Figure 8: The results of optimization of Himmelblau's function, (a) the Error value of distance to evaluate the
+position and final optimum point, (b) the value of function error based on the difference between the value of each
+iteration and final objective function value
+According to the findings of this study based on Fig. 4, Newton-Raphson is the quickest way to solve
+the Spring Force function problem. The Levenberg-Marquart algorithm cannot locate the minimal points
+with the most fantastic accuracy while optimizing this equation. Figure 5 shows a plot of the Ackley
+function and a contour plot of the function. The calculation interval is x∈[-0.5,0.5], and y∈[-0.5,0.5]. The
+position of the local minimum for this rectangular interval is (x_m,y_m )=(0,0). Moreover, the initial
+search point is (x_0,y_0 )=(-0.1,-0.45). The presented gradient-based methods can find the extremum point
+with the highest accuracy. Based on the error of the assessment process displayed in Figure 6 (a), we
+
+can conclude that the conjugate gradient Fletcher-Reeves technique with 310 iterations is the slowest technique. The inaccuracy of the Ackley function value can be seen in Figure 6(b). Using Figure 6, the study
+suggests Levenberg-Marquart be the fastest method for solving the Ackley function problem.
+
+Figure 7 shows a plot of Himmelblau's function and a contour plot of the function. The calculation
+interval is x∈[-6,6], and y∈[-6,6]. This function has four local minimums in this interval. The initial search
+point is (x_0,y_0 )=(0,6). Regarding Figure 7, Newton-Raphson's methods cannot find the nearest local
+minimum and show another local minimum that is far from the initial point. However, other methods
+find the nearest local extremum with high accuracy. We conclude that the Levenberg-Marquart technique, with 280 iterations, is the slowest among all alternative methods based on the error rate shown in
+Figure 8 (a).
+
+4.3. Effects of Initial Point Position of Optimization
+We study the effect of initial points position on optimization methods. For this purpose, 100 initial
+points at a rectangle with a 10x10 size near the optimum point are selected. For the study of the conjugate
+gradient method of Fletcher-Reeves, the Rosen brock function is used. The results of optimization are
+presented in Figure 9. Based on the results, the selected initial points have no significant effect on the
+optimum point. The algorithm can optimize the function with almost the highest accuracy. Moreover,
+finding the minimum point is almost similar in all cases. This study's results for the steepest descend
+method are also shown in Figure 10. Like the process is done for all conjugate gradients, the Polak-Ribiere
+method with spring force function (Figure 11), Newton-Raphson with Himmelblau's function (Figure 12),
+BFGS with Ackley function (Figure 13), and Levenberg-Marquardt with Rosenbrock function (Figure 14).
+Regarding the results, the effect of initial points for steepest descends, conjugate gradients FletcherReeves, and conjugate gradients Polak-Ribiere Levenberg-Marquardt and DFGS are insignificant. In the
+Newton-Raphson method, some of the points found cannot find the optimum because of the complexity
+of Himmelblau's with triple minimum points. Regarding Fig. 12, there is no unique x and y value to find
+optimum points.
+The values are concentrated on a curve instead of the optimum point. Building upon these findings,
+this study expands the discussion to encapsulate the wider importance and theoretical improvements of
+gradient-based optimization techniques in various computational settings. Our analysis emphasizes the
+adaptability of these techniques in addressing non-linear and complex optimization problems, which offers a transparent picture of their performance across multiple scenarios described by varying degrees of
+multimodality and constraint intricacies. The results derived from this work contribute to the field by
+suggesting an integrated practical framework that emphasizes the potential of combining traditional
+
+gradient-based techniques with state-of-the-art optimization methods. Our approach advances discourse
+within the optimization scope. It also positions the stage for more advanced and transformative applications in machine learning as well as engineering sectors, where solving dynamic and multi-dimensional
+problems is vital.
+By investigating the sensitivity to initial conditions, comparing diverse methods, and analyzing their
+effectiveness across multi-modal and non-linear functions, this study presents important viewpoints for
+improving the selection of optimization algorithms. Also, the discussion on incorporating heuristic methods opens ways for tackling complicated optimization tasks that traditional approaches struggle to address alone. These contributions improve the current frameworks and offer practical advantages to industries that rely on advanced optimization, from engineering to tech-driven sectors, which shows the
+importance of the development of adaptable and more robust optimization solutions.
+In addition to the influence of initial points on the optimization performance, it is vital to consider
+the roles of other essential hyperparameters, including the step size (often referred to as the learning rate
+in machine learning contexts) and regularization factors. The step size α is a critical control parameter in
+the convergence process of gradient-based techniques. An appropriately chosen step size ensures that the
+optimization process is neither too slow (small step size leading to slow convergence) nor too unstable
+(large step size causing overshooting of the minimum). Various adaptive step size techniques can be employed to dynamically adjust the learning rate based on the iteration progress, such as learning rate schedules or adaptive gradient methods like AdaGrad, RMSprop, and Adam. Moreover, regularization plays
+a notable role, particularly in scenarios prone to overfitting or where the objective function is ill-posed.
+Regularization techniques, such as L1 and L2 regularization, add a penalty term to the objective function.
+This penalty helps control the model complexity, ensuring that the solution does not fit the noise in the
+data. The choice of regularization factor λ can significantly affect the optimization's outcome by balancing
+the trade-off between bias and variance in the model.
+
+(a)
+
+(b)
+
+(c)
+Figure 9. Different initial points in optimization for conjugate gradients Fletcher-Reeves with Rosenbrock function(a): optimum function value. (b): The x and y value of optimum points, (c): The process of
+finding optimum points by starting different initial points
+
+(a)
+
+(b)
+
+(c)
+Figure 10. Results of different initial points in optimization for Steepest descend with Rosenbrock function(a): optimum function value. (b): The x and y value of optimum points, (c): The process of finding
+optimum points by starting different initial points
+
+(a)
+
+(b)
+
+(c)
+Figure 11: Results of different initial points in optimization for conjugate gradients Polak-Ribiere with
+spring force function(a): optimum function value. (b): The x and y value of optimum points, (c): The
+process of finding optimum points with starting different initial points
+
+(a)
+
+(b)
+
+(c)
+Figure 12: Results of different initial points in optimization for Newton-Raphson with Himmelblau's
+function(a): The x and y values of optimum points. (b): optimum function value, (c): The process of
+finding optimum points by starting different initial points
+
+(b)
+
+(a)
+
+(c)
+Figure 14: Results of different initial points in optimization for BFGS with Ackley function(a): The x and
+y value of optimum points. (b): optimum function value, (c): The process of finding optimum points by
+starting different initial points
+
+(b)
+
+(a)
+
+(c)
+Figure 15: Results of different initial points in optimization for Levenberg-Marquardt with Rosenbrock
+function(a): The x and y value of optimum points. (b): optimum function value, (c): The process of finding optimum points by starting different initial point
+
+5. Conclusions
+Our project involved several gradient-based optimization algorithms on functions with n-variables
+and no constraints. In our study of the techniques, we looked at the complexity, accuracy, number of
+iterations, efficiency, and overall effectiveness of each to determine how efficient it was. We tested five
+methods on three different functions for the most accurate results. We present the steepest descent, conjugate gradient methods associated with Fletcher-Reeves and Polak-Ribiere, Newton-Raphson, quasinewton (BFGS), and Levenberg-Marquardt methods. The functions presented in the method section are
+Rosenbrock, Spring Force Vanderplaats', Ackley's, and Himmelblau's. The choice of the initial guess is
+also taken into account when evaluating results. Lastly, the optimization process is plotted and evaluated
+for different 3D surfaces. It is essential to make sure you are looking for the global optimum rather than
+a local optimum, a global suboptimal solution.
+The fundamental reason why traditional approaches find poor answers is because of nonlinearity
+and multimodality. A gradient-based approach will not operate well if the goal function discontinues.
+The number of choice factors might also be an issue. The number of possible solutions, along with nonlinearities, can surpass most computers' computational capabilities, making searching for all conceivable
+
+combinations impossible. This difficulty is addressed by heuristic and metaheuristic algorithms. All optimization problems are written so that the goal and constraint functions may be precisely specified. In
+reality, all measured variables are subject to some degree of uncertainty. When uncertainty and noise
+enter the equation, the optimization becomes a stochastic optimization issue, also known as robust optimization with noise. Standard optimization approaches can only be employed if the issue is redefined or
+recast
+Author Contributions: All authors have the same contribution
+Funding: This research received no external funding
+Data Availability Statement: Data is available and can be provided over the emails querying directly to
+the author at the corresponding author.
+Conflicts of Interest: The authors declare no conflicts of interest
+
+References
+1. Schmit L A, “Structural design by systematic,” in [J]. Proc.2nd Conf. Electronic computation, 1960, pp. 105–132.
+2. Daoud, M. S., Shehab, M., Al-Mimi, H. M., Abualigah, L., Zitar, R. A., & Shambour, M. K. Y. (2023). Gradientbased optimizer (GBO): a review, theory, variants, and applications. Archives of Computational Methods in Engineering, 30(4), 2431-2449.
+3. Hoang, N. D. (2023). A novel ant colony-optimized extreme gradient boosting machine for estimating compressive
+strength of recycled aggregate concrete. Multiscale and Multidisciplinary Modeling, Experiments and Design, 120.
+4. Nazir, A., Gokcekaya, O., Billah, K. M. M., Ertugrul, O., Jiang, J., Sun, J., & Hussain, S. (2023). Multi-material
+additive manufacturing: A systematic review of design, properties, applications, challenges, and 3D Printing of
+materials and cellular metamaterials. Materials & Design, 111661.
+5. Wang, L., & Chen, W. (2024). Mixed-Variable Global Sensitivity Analysis for Knowledge Discovery and Efficient Combinatorial Materials Design. Journal of Mechanical Design, 146, 051706-1.
+6. W. Karush, “Minima of functions of several variables with inequalities as side conditions,” Traces Emerg. Nonlinear Program., pp. 217–245, 2014, doi: 10.1007/978-3-0348-0439-4_10.
+7. Attari, M. Y. N., Ala, A., Ahmadi, M., & Jami, E. N. (2024). A highly effective optimization approach for managing reverse warehouse system capacity across diverse scenarios. Process Integration and Optimization for Sustainability, 8(2), 455-471.
+8. Z. Wu, A. C. Reynolds, and D. S. Oliver, “Conditioning geostatistical models to two-phase production data,” SPE
+J., vol. 4, no. 2, pp. 142–155, 1999, doi: 10.2118/56855-PA.
+9. T. B. Tan and N. Kalogerakis, “Fully implicit, three-dimensional, three-phase simulator with automatic historymatching capability,” in Proceedings of the SPE Symposium on Reservoir Simulation, 1991, pp. 35–46, doi:
+10.2523/21205-ms.
+
+10. F. Zhang and A. C. Reynolds, “Optimization Algorithms for Automatic History Matching of Production Data,” in
+Proc. 8th Eur. Conf. Math. Oil Recovery, 2014, pp. 1–11, doi: 10.3997/2214-4609.201405958.
+11. C. Chen, G. Li, and A. C. Reynolds, “Robust constrained optimization of shortand long-term net present value for
+closed-loop reservoir management,” SPE J., vol. 17, no. 3, pp. 849–864, 2012, doi: 10.2118/141314-pa.
+12. G. R. Gavalas, P. C. Shah, and J. H. Seinfeld, “Reservoir History Matching By Bayesian Estimation.,” Soc Pet
+Eng AIME J, vol. 16, no. 6, pp. 337–350, 1976, doi: 10.2118/5740-pa.
+13. P. Sarma, L. J. Durlofsky, K. Aziz, and W. H. Chen, “A new approach to automatic history matching using kernel
+PCA,” in SPE Reservoir Simulation Symposium Proceedings, 2007, pp. 262–280, doi: 10.2118/106176-ms.
+14. T. Goda, T. Hironaka, W. Kitade, and A. Foster, “Unbiased MLMC stochastic gradient-based optimization of
+Bayesian experimental designs,” SIAM J. Sci. Comput., vol. 44, no. 1, pp. A286--A311, 2020, doi:
+10.1137/20m1338848.
+15. I. Ahmadianfar, W. Gong, A. A. Heidari, N. A. Golilarz, A. Samadi-Koucheksaraee, and H. Chen, “Gradientbased optimization with ranking mechanisms for parameter identification of photovoltaic systems,” Energy Reports, vol. 7, pp. 3979–3997, 2021, doi: 10.1016/j.egyr.2021.06.064.
+16. M. Premkumar, P. Jangir, C. Ramakrishnan, G. Nalinipriya, H. H. Alhelou, and B. S. Kumar, “Identification of
+Solar Photovoltaic Model Parameters Using an Improved Gradient-Based Optimization Algorithm with Chaotic
+Drifts,” IEEE Access, vol. 9, pp. 62347–62379, 2021, doi: 10.1109/ACCESS.2021.3073821.
+17. S. Tuli, S. R. Poojara, S. N. Srirama, G. Casale, and N. R. Jennings, “COSCO: Container Orchestration Using CoSimulation and Gradient Based Optimization for Fog Computing Environments,” IEEE Trans. Parallel Distrib.
+Syst., vol. 33, no. 1, pp. 101–116, 2022, doi: 10.1109/TPDS.2021.3087349.
+18. W. Zhou, P. Wang, A. A. Heidari, X. Zhao, H. Turabieh, and H. Chen, “Random learning gradient based optimization for efficient design of photovoltaic models,” Energy Convers. Manag., vol. 230, p. 113751, 2021, doi:
+10.1016/j.enconman.2020.113751.
+19. E. O. Neftci, H. Mostafa, and F. Zenke, “Surrogate Gradient Learning in Spiking Neural Networks: Bringing the
+Power of Gradient-based optimization to spiking neural networks,” IEEE Signal Process. Mag., vol. 36, no. 6, pp.
+51–63, 2019, doi: 10.1109/MSP.2019.2931595.
+20. B. Zhou, F. Gao, J. Pan, and S. Shen, “Robust Real-time UAV Replanning Using Guided Gradient-based Optimization and Topological Paths,” in Proceedings - IEEE International Conference on Robotics and Automation,
+2020, pp. 1208–1214, doi: 10.1109/ICRA40945.2020.9196996.
+21. R. A. S. Albani, V. V. L. Albani, and A. J. Silva Neto, “Source characterization of airborne pollutant emissions by
+hybrid metaheuristic/gradient-based optimization techniques,” Environ. Pollut., vol. 267, p. 115618, 2020, doi:
+10.1016/j.envpol.2020.115618.
+22. J. Li and J. Cai, “Massively multipoint aerodynamic shape design via surrogate-assisted gradient-based optimization,” AIAA J., vol. 58, no. 5, pp. 1949–1963, 2020, doi: 10.2514/1.J058491.
+23. S. De, J. Hampton, K. Maute, and A. Doostan, “Topology optimization under uncertainty using a stochastic gradient-based approach,” Struct. Multidiscip. Optim., vol. 62, no. 5, pp. 2255–2278, 2020, doi: 10.1007/s00158-02002599-z.
+
+24. F. Feng, W. Na, W. Liu, S. Yan, L. Zhu, and Q. J. Zhang, “Parallel gradient-based em optimization for microwave
+components using adjoint-sensitivity-based neuro-transfer function surrogate,” IEEE Trans. Microw. Theory
+Tech., vol. 68, no. 9, pp. 3606–3620, 2020, doi: 10.1109/TMTT.2020.3005145.
+25. Sharifi, A., Naeini, H. K., Ahmadi, M., Asadi, S., & Varmaghani, A. (2025). Multi-Objective Optimization of
+Water Resource Allocation for Groundwater Recharge and Surface Runoff Management in Watershed Systems.
+arXiv preprint arXiv:2502.15953.
+26. Abbasalizadeh, M., Vellamchety, K., Rayavaram, P., & Narain, S. (2024). Dynamic Link Scheduling in Wireless
+Networks Through Fuzzy-Enhanced Deep Learning. IEEE Open Journal of the Communications Society.
+27. Jamali, S., & Abbasalizadeh, M. (2021). Cost‐aware co‐locating of services in Internet of Things by using multicriteria decision making. International Journal of Communication Systems, 34(16), e4962.
+28. Norcéide, F. S., Aoki, E., Tran, V., Nia, M. F., Thompson, C., & Chandra, K. (2024, December). Positional Tracking of Physical Objects in an Augmented Reality Environment Using Neuromorphic Vision Sensors. In 2024 International Conference on Machine Learning and Applications (ICMLA) (pp. 1031-1036). IEEE.
+29. Nia, M. F. (2024). Explore Cross-Codec Quality-Rate Convex Hulls Relation for Adaptive Streaming. arXiv preprint arXiv:2408.09044.
+30. Nia, M. F., Callen, G. E., An, J., Chandra, K., Thompson, C., Wolkowicz, K., & Denis, M. (2023, April). Experiential Learning for Interdisciplinary Education on Vestibular System Models. In ASEE annual conference exposition.
+31. Thompson, C., Farhadi Nia, M., Aoki, E., Norceide, F., Tran, V. T., & Chandra, K. (2024). Nonlinear bone conducted hearing. The Journal of the Acoustical Society of America, 155(3_Supplement), A69-A69.
+32. Cao, S., Kasliwal, A., Reihanifar, M., Robusté, F., & Hansen, M. (2024). Effective Management of Airport Security Queues with Passenger Reassignment. In Proceedings of International Workshop on ATM/CNS 2024 International Workshop on ATM/CNS (pp. 141-146). Electronic Navigation Research Institute.
+33. Hussain, A., Reihanifar, M., Niaz, R., Albalawi, O., Maghrebi, M., Ahmed, A. T., & Danandeh Mehr, A. (2024).
+Characterizing Inter-Seasonal Meteorological Drought Using Random Effect Logistic Regression. Sustainability,
+16(19), 8433.
+34. Danandeh Mehr, A., Reihanifar, M., Alee, M. M., Vazifehkhah Ghaffari, M. A., Safari, M. J. S., & Mohammadi,
+B. (2023). VMD-GP: A new evolutionary explicit model for meteorological drought prediction at ungauged catchments. Water, 15(15), 2686.
+35. Reihanifar, M., & Naimi, S. (2018). Evaluation of road construction projects by value engineering approach as a
+tool for sustainability. International journal of ecosystems and ecology science (IJEES), 8(2), 339-346.
+36. Mohammadagha, M., Asadi, S., & Naeini, H. K. (2025). Evaluating Machine Learning Performance Using Python
+for Neural Network Models in Urban Transportation in New York City Case Study.
+37. Naeini, H. K., Shomali, R., Pishahang, A., Hasanzadeh, H., Mohammadi, M., Asadi, S., & Lonbar, A. G. (2025).
+PINN-DT: Optimizing Energy Consumption in Smart Building Using Hybrid Physics-Informed Neural Networks
+and Digital Twin Framework with Blockchain Security. arXiv preprint arXiv:2503.00331.
+
+38. Lonbar, A. G., Hasanzadeh, H., Asgari, F., Khamoushi, E., Naeini, H. K., Shomali, R., & Asadi, S. (2024). Prioritizing Risk Factors in Media Entrepreneurship on Social Networks: Hybrid Fuzzy Z-Number Approaches for
+Strategic Budget Allocation and Risk Management in Advertising Construction Campaigns. arXiv preprint
+arXiv:2409.18976.
+39. Khamoushi, E. (2024). AI in Food Marketing from Personalized Recommendations to Predictive Analytics: Comparing Traditional Advertising Techniques with AI-Driven Strategies. arXiv preprint arXiv:2410.01815.
+40. Hou, J., Zhou, K., Zhang, X. S., Kang, X. D., & Xie, H. (2015). A review of closed-loop reservoir management.
+Petroleum Science, 12(1), 114-128.
+41. Breseghello, L., Hajikarimian, H., Jørgensen, H. B., & Naboni, R. (2023). 3DLightBeam+. Design, simulation,
+and testing of carbon-efficient reinforced 3D concrete printed beams. Engineering Structures, 292, 116511.
+42. Sarojini, D., Ruh, M. L., Joshy, A. J., Yan, J., Ivanov, A. K., Scotzniovsky, L., ... & Hwang, J. T. (2023). LargeScale Multidisciplinary Design Optimization of an eVTOL Aircraft using Comprehensive Analysis. In AIAA
+SCITECH 2023 Forum (p. 0146).
+43. Sang, L., Häfner, B., Zuo, X., & Cremers, D. (2023). High-Quality RGB-D Reconstruction via Multi-View Uncalibrated Photometric Stereo and Gradient-SDF. In Proceedings of the IEEE/CVF Winter Conference on Applications of Computer Vision (pp. 3106-3115).
+44. Misbah, M., Kaleem, Z., Khalid, W., Yuen, C., & Jamalipour, A. (2023). Phase and 3D Placement Optimization
+for Rate Enhancement in RIS-Assisted UAV Networks. IEEE Wireless Communications Letters.
+45. Wang, C., Lian, Y., Gao, R., Xiong, F., & Li, M. J. (2024). A multi-point synergistic gradient evolution method
+for topology optimization leveraging neural network with applications in converged and diverse designs. Computational Mechanics, 73(1), 105-122.
+46. Ock, J., Mollaei, P., & Barati Farimani, A. (2024). GradNav: Accelerated Exploration of Potential Energy Surfaces
+with Gradient-Based Navigation. Journal of Chemical Theory and Computation
+
+
