@@ -94,7 +94,7 @@ def process_vbr_mode(args, encoder: str, encoder_type: str, files: List[Path]) -
             vmaf_tolerance=args.vmaf_tol,
             clip_positions=clip_positions,
             clip_duration=args.vbr_clip_duration,
-            max_trials=args.vbr_max_trials
+            base_max_trials=args.vbr_max_trials
         )
         
         if result.get('success', False):
@@ -193,8 +193,8 @@ def main():
                           help="Auto-select VBR or QP based on file characteristics (default)")
     
     # Quality settings
-    parser.add_argument("--vmaf-target", type=float, default=92.0, 
-                       help="Target VMAF score (default: 92.0)")
+    parser.add_argument("--vmaf-target", type=float, default=95, 
+                       help="Target VMAF score (default: 95.0)")
     parser.add_argument("--vmaf-tol", type=float, default=1.0,
                        help="VMAF tolerance (default: 1.0)")
     
@@ -204,7 +204,7 @@ def main():
     parser.add_argument("--vbr-clip-duration", type=int, default=60,
                        help="Duration of each VBR test clip in seconds (default: 60)")
     parser.add_argument("--vbr-max-trials", type=int, default=8,
-                       help="Maximum VBR optimization trials (default: 8)")
+                       help="Base maximum VBR trials - system adapts based on convergence (default: 8)")
     
     # Encoder settings
     parser.add_argument("--encoder", choices=["cpu", "nvenc", "amf", "qsv", "videotoolbox"],

@@ -19,14 +19,66 @@ from typing import List, Optional
 from .system_utils import DEBUG, get_next_transcoded_dir
 
 
+def detect_hdr_content(input_file: Path) -> bool:
+    """
+    Detect if input video actually contains HDR content.
+    
+    Returns True only if the video has actual HDR characteristics:
+    - HDR color primaries (bt2020)  
+    - HDR transfer characteristics (smpte2084/arib-std-b67)
+    - Wide color gamut indicators
+    """
+    try:
+        import subprocess
+        import json
+        
+        # Use ffprobe to analyze color metadata
+        cmd = [
+            "ffprobe", "-v", "quiet", "-print_format", "json", "-show_streams",
+            "-select_streams", "v:0", str(input_file)
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        if result.returncode != 0:
+            return False
+            
+        data = json.loads(result.stdout)
+        video_stream = data.get('streams', [{}])[0]
+        
+        # Check for HDR indicators
+        color_primaries = video_stream.get('color_primaries', '').lower()
+        color_trc = video_stream.get('color_trc', '').lower() 
+        color_space = video_stream.get('color_space', '').lower()
+        
+        # HDR indicators
+        hdr_primaries = ['bt2020', 'bt2020-10', 'bt2020-12']
+        hdr_transfer = ['smpte2084', 'arib-std-b67', 'smpte428', 'hlg']
+        hdr_colorspace = ['bt2020nc', 'bt2020c', 'bt2020_ncl', 'bt2020_cl']
+        
+        is_hdr = (
+            any(prim in color_primaries for prim in hdr_primaries) or
+            any(trc in color_trc for trc in hdr_transfer) or  
+            any(cs in color_space for cs in hdr_colorspace)
+        )
+        
+        return is_hdr
+        
+    except Exception:
+        # If detection fails, assume SDR to avoid false HDR metadata
+        return False
+
+
 def build_encode_cmd(input_file: Path, output_file: Path, encoder: str, encoder_type: str, 
                     qp: int, preserve_hdr_metadata: bool = True, 
                     progress_file: Optional[Path] = None) -> List[str]:
-    """Build FFmpeg encoding command."""
+    """Build FFmpeg encoding command with proper HDR detection."""
     cmd = ["ffmpeg", "-hide_banner", "-y"]
     
     # Input
     cmd.extend(["-i", str(input_file)])
+    
+    # CRITICAL FIX: Only apply HDR metadata if source is actually HDR
+    apply_hdr = preserve_hdr_metadata and detect_hdr_content(input_file)
     
     # Video encoding
     cmd.extend(["-c:v", encoder])
@@ -35,23 +87,23 @@ def build_encode_cmd(input_file: Path, output_file: Path, encoder: str, encoder_
         # Hardware encoder settings
         if "nvenc" in encoder:
             cmd.extend(["-preset", "slow", "-cq", str(qp)])
-            if preserve_hdr_metadata:
+            if apply_hdr:
                 cmd.extend(["-colorspace", "bt2020nc", "-color_primaries", "bt2020", 
                            "-color_trc", "smpte2084"])
         elif "amf" in encoder:
             cmd.extend(["-usage", "transcoding", "-quality", "quality", "-qp_i", str(qp), 
                        "-qp_p", str(qp), "-qp_b", str(qp)])
-            if preserve_hdr_metadata:
+            if apply_hdr:
                 cmd.extend(["-colorspace", "bt2020nc", "-color_primaries", "bt2020", 
                            "-color_trc", "smpte2084"])
         elif "videotoolbox" in encoder:
             cmd.extend(["-q:v", str(qp)])
-            if preserve_hdr_metadata:
+            if apply_hdr:
                 cmd.extend(["-colorspace", "bt2020nc", "-color_primaries", "bt2020", 
                            "-color_trc", "smpte2084", "-color_range", "tv"])
         elif "qsv" in encoder:
             cmd.extend(["-preset", "veryslow", "-global_quality", str(qp)])
-            if preserve_hdr_metadata:
+            if apply_hdr:
                 cmd.extend(["-colorspace", "bt2020nc", "-color_primaries", "bt2020", 
                            "-color_trc", "smpte2084"])
     else:
@@ -60,7 +112,7 @@ def build_encode_cmd(input_file: Path, output_file: Path, encoder: str, encoder_
         
         # x265 specific parameters
         x265_params = ["rd=6"]
-        if preserve_hdr_metadata:
+        if apply_hdr:
             x265_params.extend([
                 "colorprim=bt2020",
                 "transfer=smpte2084", 
@@ -312,10 +364,10 @@ def detect_best_encoder() -> tuple[str, str]:
     """Detect the best available encoder and its type."""
     available_encoders = get_encoder_list()
     
-    # Priority order: hardware first, then software
+    # Priority order: AMD -> NVIDIA -> Intel -> Software (matches media_utils.py)
     encoder_preferences = [
-        ("hevc_nvenc", "hardware"),
-        ("hevc_amf", "hardware"), 
+        ("hevc_amf", "hardware"),
+        ("hevc_nvenc", "hardware"), 
         ("hevc_videotoolbox", "hardware"),
         ("hevc_qsv", "hardware"),
         ("libx265", "software")

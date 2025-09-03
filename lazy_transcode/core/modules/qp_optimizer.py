@@ -20,6 +20,7 @@ from tqdm import tqdm
 from .media_utils import get_duration_sec, compute_vmaf_score
 from .system_utils import TEMP_FILES, DEBUG
 from .transcoding_engine import build_encode_cmd
+from .vbr_optimizer import warn_hardware_encoder_inefficiency
 
 
 def extract_random_clips(file: Path, num_clips: int, clip_duration: int = 120) -> List[Path]:
@@ -305,6 +306,9 @@ def find_optimal_qp(files: list[Path], encoder: str, encoder_type: str,
                    vmaf_threads: int = 0,
                    preserve_hdr_metadata: bool = True) -> int:
     """Find optimal QP using VMAF scoring across sample files"""
+    # Warn about hardware encoder inefficiency for pre-encoding
+    warn_hardware_encoder_inefficiency(encoder_type, "QP optimization")
+    
     if candidate_qps is None:
         candidate_qps = [16, 18, 20, 22, 24]
         
