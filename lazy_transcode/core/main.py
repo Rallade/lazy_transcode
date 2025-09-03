@@ -94,7 +94,7 @@ def process_vbr_mode(args, encoder: str, encoder_type: str, files: List[Path]) -
             vmaf_tolerance=args.vmaf_tol,
             clip_positions=clip_positions,
             clip_duration=args.vbr_clip_duration,
-            base_max_trials=args.vbr_max_trials
+            max_safety_limit=args.vbr_max_trials
         )
         
         if result.get('success', False):
