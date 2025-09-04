@@ -103,7 +103,7 @@ class TestSystemUtils(unittest.TestCase):
         expected = base_dir / "Transcoded_4"
         self.assertEqual(transcoded_dir, expected)
     
-    @patch('lazy_transcode.core.modules.system_utils.TEMP_FILES')
+    @patch('lazy_transcode.core.modules.system.system_utils.TEMP_FILES')
     def test_cleanup_temp_files_empty_list(self, mock_temp_files):
         """Test cleanup with empty temp files list."""
         mock_temp_files.clear()
@@ -111,7 +111,7 @@ class TestSystemUtils(unittest.TestCase):
         # Should not raise exception
         cleanup_temp_files()
     
-    @patch('lazy_transcode.core.modules.system_utils.TEMP_FILES')
+    @patch('lazy_transcode.core.modules.system.system_utils.TEMP_FILES')
     def test_cleanup_temp_files_with_files(self, mock_temp_files):
         """Test cleanup with temp files."""
         # Create test files

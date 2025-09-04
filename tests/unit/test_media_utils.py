@@ -91,7 +91,7 @@ class TestMediaUtils(unittest.TestCase):
         result = get_duration_sec(self.test_file)
         self.assertEqual(result, 0.0)
     
-    @patch('lazy_transcode.core.modules.media_utils.run_command')
+    @patch('lazy_transcode.core.modules.analysis.media_utils.run_command')
     def test_get_video_codec_h264(self, mock_run_command):
         """Test video codec detection for H.264."""
         # Mock successful command result
@@ -104,7 +104,7 @@ class TestMediaUtils(unittest.TestCase):
         
         self.assertEqual(result, "h264")
     
-    @patch('lazy_transcode.core.modules.media_utils.run_command')
+    @patch('lazy_transcode.core.modules.analysis.media_utils.run_command')
     def test_get_video_codec_hevc(self, mock_run_command):
         """Test video codec detection for HEVC."""
         # Mock successful command result

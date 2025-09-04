@@ -107,7 +107,7 @@ class TestCommandBuilding(unittest.TestCase):
         self.input_file = Path("input.mkv")
         self.output_file = Path("output.mkv")
     
-    @patch('lazy_transcode.core.modules.transcoding_engine.detect_hdr_content')
+    @patch('lazy_transcode.core.modules.processing.transcoding_engine.detect_hdr_content')
     def test_build_encode_cmd_software_sdr(self, mock_detect_hdr):
         """Test building encode command for software encoder with SDR content."""
         mock_detect_hdr.return_value = False
@@ -124,7 +124,7 @@ class TestCommandBuilding(unittest.TestCase):
         self.assertIn("23", cmd_str)
         self.assertNotIn("colorprim=bt2020", cmd_str)
     
-    @patch('lazy_transcode.core.modules.transcoding_engine.detect_hdr_content')
+    @patch('lazy_transcode.core.modules.processing.transcoding_engine.detect_hdr_content')
     def test_build_encode_cmd_software_hdr(self, mock_detect_hdr):
         """Test building encode command for software encoder with HDR content."""
         mock_detect_hdr.return_value = True
@@ -140,7 +140,7 @@ class TestCommandBuilding(unittest.TestCase):
         self.assertIn("colorprim=bt2020", cmd_str)
         self.assertIn("transfer=smpte2084", cmd_str)
     
-    @patch('lazy_transcode.core.modules.transcoding_engine.detect_hdr_content')
+    @patch('lazy_transcode.core.modules.processing.transcoding_engine.detect_hdr_content')
     def test_build_encode_cmd_nvenc_hdr(self, mock_detect_hdr):
         """Test building encode command for NVENC with HDR content."""
         mock_detect_hdr.return_value = True
@@ -158,7 +158,7 @@ class TestCommandBuilding(unittest.TestCase):
         self.assertIn("-colorspace", cmd_str)
         self.assertIn("bt2020nc", cmd_str)
     
-    @patch('lazy_transcode.core.modules.transcoding_engine.detect_hdr_content')
+    @patch('lazy_transcode.core.modules.processing.transcoding_engine.detect_hdr_content')
     def test_build_encode_cmd_amf(self, mock_detect_hdr):
         """Test building encode command for AMF encoder."""
         mock_detect_hdr.return_value = False
@@ -189,7 +189,7 @@ class TestCommandBuilding(unittest.TestCase):
         self.assertIn("-progress", cmd_str)
         self.assertIn(str(progress_file), cmd_str)
     
-    @patch('lazy_transcode.core.modules.transcoding_engine.detect_hdr_content')
+    @patch('lazy_transcode.core.modules.processing.transcoding_engine.detect_hdr_content')
     def test_build_vbr_encode_cmd_basic(self, mock_detect_hdr):
         """Test building VBR encode command."""
         mock_detect_hdr.return_value = False
@@ -207,7 +207,7 @@ class TestCommandBuilding(unittest.TestCase):
         self.assertIn(str(self.input_file), cmd_str)
         self.assertIn(str(self.output_file), cmd_str)
     
-    @patch('lazy_transcode.core.modules.transcoding_engine.detect_hdr_content')
+    @patch('lazy_transcode.core.modules.processing.transcoding_engine.detect_hdr_content')
     def test_build_vbr_encode_cmd_hdr(self, mock_detect_hdr):
         """Test building VBR encode command with HDR."""
         mock_detect_hdr.return_value = True
@@ -264,7 +264,7 @@ class TestEncodingEdgeCases(unittest.TestCase):
         # Should default to False for empty streams
         self.assertFalse(result)
     
-    @patch('lazy_transcode.core.modules.transcoding_engine.detect_hdr_content')
+    @patch('lazy_transcode.core.modules.processing.transcoding_engine.detect_hdr_content')
     def test_build_encode_cmd_preserve_hdr_false(self, mock_detect_hdr):
         """Test building encode command with HDR preservation disabled."""
         mock_detect_hdr.return_value = True

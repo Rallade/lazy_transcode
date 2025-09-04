@@ -63,7 +63,7 @@ class TestStreamAnalysisLogging(unittest.TestCase):
             ]
         }
     
-    @patch('lazy_transcode.core.modules.transcoding_engine.run_command')
+    @patch('lazy_transcode.core.modules.processing.transcoding_engine.run_command')
     @patch('builtins.print')
     def test_log_input_streams_success(self, mock_print, mock_run_command):
         """Test successful input stream analysis and logging."""
@@ -92,7 +92,7 @@ class TestStreamAnalysisLogging(unittest.TestCase):
         self.assertTrue(any("Subtitle streams: 2" in str(call) for call in print_calls))
         self.assertTrue(any("Chapters: 2" in str(call) for call in print_calls))
     
-    @patch('lazy_transcode.core.modules.transcoding_engine.run_command')
+    @patch('lazy_transcode.core.modules.processing.transcoding_engine.run_command')
     @patch('builtins.print')
     def test_log_input_streams_error_handling(self, mock_print, mock_run_command):
         """Test error handling in input stream analysis."""
@@ -107,7 +107,7 @@ class TestStreamAnalysisLogging(unittest.TestCase):
         print_calls = mock_print.call_args_list
         self.assertTrue(any("Warning: Could not analyze input streams" in str(call) for call in print_calls))
     
-    @patch('lazy_transcode.core.modules.transcoding_engine.run_command')
+    @patch('lazy_transcode.core.modules.processing.transcoding_engine.run_command')
     @patch('builtins.print')
     def test_log_output_streams_with_size_comparison(self, mock_print, mock_run_command):
         """Test output stream verification with file size comparison."""
@@ -144,10 +144,10 @@ class TestEnhancedVBRTranscoding(unittest.TestCase):
         self.max_bitrate = 5000
         self.avg_bitrate = 4000
     
-    @patch('lazy_transcode.core.modules.encoder_config.EncoderConfigBuilder.build_vbr_encode_cmd')
-    @patch('lazy_transcode.core.modules.transcoding_engine._log_input_streams')
-    @patch('lazy_transcode.core.modules.transcoding_engine._log_output_streams')
-    @patch('lazy_transcode.core.modules.transcoding_engine.monitor_progress')
+    @patch('lazy_transcode.core.modules.config.encoder_config.EncoderConfigBuilder.build_vbr_encode_cmd')
+    @patch('lazy_transcode.core.modules.processing.transcoding_engine._log_input_streams')
+    @patch('lazy_transcode.core.modules.processing.transcoding_engine._log_output_streams')
+    @patch('lazy_transcode.core.modules.processing.transcoding_engine.monitor_progress')
     @patch('subprocess.Popen')
     @patch('builtins.print')
     def test_transcode_file_vbr_success(self, mock_print, mock_popen, mock_monitor,
@@ -186,7 +186,7 @@ class TestEnhancedVBRTranscoding(unittest.TestCase):
         self.assertTrue(any(f"Target bitrate: {self.avg_bitrate} kbps" in str(call) for call in print_calls))
         self.assertTrue(any("Successfully transcoded" in str(call) for call in print_calls))
 
-    @patch('lazy_transcode.core.modules.encoder_config.EncoderConfigBuilder.build_vbr_encode_cmd')
+    @patch('lazy_transcode.core.modules.config.encoder_config.EncoderConfigBuilder.build_vbr_encode_cmd')
     @patch('subprocess.Popen')
     @patch('builtins.print')
     def test_transcode_file_vbr_failure(self, mock_print, mock_popen, mock_build_cmd):
@@ -211,7 +211,7 @@ class TestEnhancedVBRTranscoding(unittest.TestCase):
         self.assertTrue(any("STDOUT: stdout output" in str(call) for call in print_calls))
         self.assertTrue(any("STDERR: stderr error message" in str(call) for call in print_calls))
 
-    @patch('lazy_transcode.core.modules.encoder_config.EncoderConfigBuilder.build_vbr_encode_cmd')
+    @patch('lazy_transcode.core.modules.config.encoder_config.EncoderConfigBuilder.build_vbr_encode_cmd')
     @patch('subprocess.Popen')
     def test_transcode_file_vbr_progress_tracking(self, mock_popen, mock_build_cmd):
         """Test progress tracking functionality in VBR transcoding."""
@@ -289,7 +289,7 @@ class TestProgressMonitoring(unittest.TestCase):
 class TestStreamPreservationIntegration(unittest.TestCase):
     """Test integration with comprehensive stream preservation."""
     
-    @patch('lazy_transcode.core.modules.encoder_config.EncoderConfigBuilder.build_vbr_encode_cmd')
+    @patch('lazy_transcode.core.modules.config.encoder_config.EncoderConfigBuilder.build_vbr_encode_cmd')
     def test_uses_comprehensive_encoder_builder(self, mock_build_cmd):
         """Test that VBR transcoding uses the comprehensive encoder builder."""
         # Mock the comprehensive build command that includes stream preservation
@@ -340,7 +340,7 @@ class TestProgressFileHandling(unittest.TestCase):
         self.input_file = Path("test.mkv")
         self.output_file = Path("output.mkv")
     
-    @patch('lazy_transcode.core.modules.encoder_config.EncoderConfigBuilder.build_vbr_encode_cmd')
+    @patch('lazy_transcode.core.modules.config.encoder_config.EncoderConfigBuilder.build_vbr_encode_cmd')
     @patch('subprocess.Popen')
     def test_progress_file_cleanup(self, mock_popen, mock_build_cmd):
         """Test that progress files are properly cleaned up."""

@@ -31,8 +31,8 @@ class TestVBRBounds(unittest.TestCase):
             import shutil
             shutil.rmtree(self.temp_dir)
     
-    @patch('lazy_transcode.core.modules.vbr_optimizer.ffprobe_field')
-    @patch('lazy_transcode.core.modules.vbr_optimizer.get_duration_sec')
+    @patch('lazy_transcode.core.modules.optimization.vbr_optimizer.ffprobe_field')
+    @patch('lazy_transcode.core.modules.optimization.vbr_optimizer.get_duration_sec')
     def test_get_intelligent_bounds_1080p(self, mock_duration, mock_ffprobe):
         """Test intelligent bounds calculation for 1080p."""
         # Mock video properties
@@ -53,8 +53,8 @@ class TestVBRBounds(unittest.TestCase):
         self.assertGreater(min_rate, 1000)  # Reasonable minimum
         self.assertLess(max_rate, 30000)   # Reasonable maximum
     
-    @patch('lazy_transcode.core.modules.vbr_optimizer.ffprobe_field')
-    @patch('lazy_transcode.core.modules.vbr_optimizer.get_duration_sec')
+    @patch('lazy_transcode.core.modules.optimization.vbr_optimizer.ffprobe_field')
+    @patch('lazy_transcode.core.modules.optimization.vbr_optimizer.get_duration_sec')
     def test_get_intelligent_bounds_4k(self, mock_duration, mock_ffprobe):
         """Test intelligent bounds calculation for 4K."""
         # Mock 4K properties
@@ -196,7 +196,7 @@ class TestVBRCommandBuilding(unittest.TestCase):
         cmd_str = ' '.join(cmd)
         self.assertIn("hevc_nvenc", cmd_str)
     
-    @patch('lazy_transcode.core.modules.vbr_optimizer.detect_hdr_content')
+    @patch('lazy_transcode.core.modules.optimization.vbr_optimizer.detect_hdr_content')
     def test_build_vbr_encode_cmd_hdr(self, mock_detect_hdr):
         """Test VBR command building with HDR content."""
         mock_detect_hdr.return_value = True
@@ -228,9 +228,9 @@ class TestVBROptimizerIntegration(unittest.TestCase):
             import shutil
             shutil.rmtree(self.temp_dir)
     
-    @patch('lazy_transcode.core.modules.vbr_optimizer.extract_clips_parallel')
-    @patch('lazy_transcode.core.modules.vbr_optimizer._test_parameter_combination')
-    @patch('lazy_transcode.core.modules.vbr_optimizer.get_duration_sec')
+    @patch('lazy_transcode.core.modules.optimization.vbr_optimizer.extract_clips_parallel')
+    @patch('lazy_transcode.core.modules.optimization.vbr_optimizer._test_parameter_combination')
+    @patch('lazy_transcode.core.modules.optimization.vbr_optimizer.get_duration_sec')
     def test_optimize_encoder_settings_vbr_basic(self, mock_duration, mock_test, mock_extract):
         """Test basic VBR encoder optimization."""
         # Mock dependencies
@@ -251,7 +251,7 @@ class TestVBROptimizerIntegration(unittest.TestCase):
             self.assertIsInstance(result, dict)
             self.assertIn('success', result)
     
-    @patch('lazy_transcode.core.modules.vbr_optimizer.extract_clips_parallel')
+    @patch('lazy_transcode.core.modules.optimization.vbr_optimizer.extract_clips_parallel')
     def test_optimize_encoder_settings_vbr_clip_extraction_failure(self, mock_extract):
         """Test VBR optimization with clip extraction failure."""
         # Mock clip extraction failure
@@ -278,7 +278,7 @@ class TestVBRUtilities(unittest.TestCase):
         warn_hardware_encoder_inefficiency("hardware", "pre-encoding")
         warn_hardware_encoder_inefficiency("software", "encoding")
     
-    @patch('lazy_transcode.core.modules.vbr_optimizer.get_duration_sec')
+    @patch('lazy_transcode.core.modules.optimization.vbr_optimizer.get_duration_sec')
     def test_get_vbr_clip_positions(self, mock_duration):
         """Test VBR clip position calculation."""
         from lazy_transcode.core.modules.optimization.vbr_optimizer import get_vbr_clip_positions

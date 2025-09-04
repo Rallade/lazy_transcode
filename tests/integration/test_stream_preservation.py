@@ -123,8 +123,8 @@ class TestEncoderConfigBuilderStreamPreservation(unittest.TestCase):
 class TestVBROptimizerIntegration(unittest.TestCase):
     """Test VBR optimizer integration with comprehensive encoder."""
     
-    @patch('lazy_transcode.core.modules.vbr_optimizer.EncoderConfigBuilder')
-    @patch('lazy_transcode.core.modules.vbr_optimizer.get_video_dimensions')
+    @patch('lazy_transcode.core.modules.optimization.vbr_optimizer.EncoderConfigBuilder')
+    @patch('lazy_transcode.core.modules.optimization.vbr_optimizer.get_video_dimensions')
     def test_vbr_optimizer_uses_comprehensive_builder(self, mock_get_dims, mock_builder_class):
         """Test that VBR optimizer uses the comprehensive EncoderConfigBuilder."""
         from lazy_transcode.core.modules.optimization.vbr_optimizer import build_vbr_encode_cmd
