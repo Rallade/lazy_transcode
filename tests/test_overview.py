@@ -90,12 +90,15 @@ def main():
             root_files.append(file_path.name)
     
     for file_name in sorted(root_files):
-        if file_name == 'run_all_tests.py':
-            print(f"   • {file_name} ⭐ (Main test runner)")
-        elif file_name == 'README.md':
-            print(f"   • {file_name} 📖 (Documentation)")
-        else:
+        if file_name == 'test_overview.py':
+            print(f"   • {file_name} 🔍 (Test status overview)")
+        elif file_name == '__init__.py':
             print(f"   • {file_name}")
+    
+    # Show README
+    readme_path = Path(__file__).parent / 'README.md'
+    if readme_path.exists():
+        print(f"   • README.md 📖 (Documentation)")
     
     print(f"\\n{'='*60}")
     print(f"📈 SUMMARY")
@@ -106,9 +109,10 @@ def main():
     print(f"{'='*60}")
     
     print(f"\\n🚀 USAGE")
-    print(f"   Run all tests: python tests/run_all_tests.py")
-    print(f"   Run unit tests: python tests/run_all_tests.py unit")
-    print(f"   Run working only: python tests/run_all_tests.py --working-only")
+    print(f"   Run all tests: python -m unittest discover tests -v")
+    print(f"   Run unit tests: python -m unittest discover tests/unit -v")
+    print(f"   Run specific category: python -m unittest discover tests/regression -v")
+    print(f"   Get overview: python tests/test_overview.py")
     
     print(f"\\n🐛 CRITICAL ISSUES FOUND")
     print(f"   Regression tests discovered 48 real bugs:")
