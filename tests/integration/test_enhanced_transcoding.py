@@ -342,11 +342,17 @@ class TestStreamPreservationIntegration(unittest.TestCase):
             # Verify the comprehensive encoder was used
             mock_build_cmd.assert_called_once()
             
-            # Verify the command includes comprehensive stream preservation
-            call_args = mock_popen.call_args[0][0]  # First positional argument (the command)
+            # Find the FFmpeg command among all subprocess calls
+            ffmpeg_call = None
+            for call in mock_popen.call_args_list:
+                if call[0] and len(call[0]) > 0 and 'ffmpeg' in str(call[0][0]):
+                    ffmpeg_call = call[0][0]  # First positional argument (the command)
+                    break
             
-            # Check for stream preservation flags in the actual command passed to Popen
-            cmd_str = ' '.join(call_args)
+            self.assertIsNotNone(ffmpeg_call, "FFmpeg command should have been called")
+            
+            # Check for stream preservation flags in the FFmpeg command
+            cmd_str = ' '.join(ffmpeg_call) if ffmpeg_call else ""
             self.assertIn('-map 0', cmd_str)
             self.assertIn('-map_metadata 0', cmd_str)
             self.assertIn('-map_chapters 0', cmd_str)
