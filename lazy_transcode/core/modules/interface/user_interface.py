@@ -11,8 +11,8 @@ import sys
 from pathlib import Path
 from typing import List
 
-from .system_utils import format_size, run_command
-from .media_utils import get_duration_sec, compute_vmaf_score, should_skip_codec
+from ..system.system_utils import format_size, run_command
+from ..analysis.media_utils import get_duration_sec, compute_vmaf_score, should_skip_codec
 
 
 def prompt_user_confirmation(message: str, auto_yes: bool = False) -> bool:
@@ -72,7 +72,7 @@ def verify_and_prompt_transcode(files: List[Path], optimal_qp: int, encoder: str
             
             if result.returncode == 0 and sample_file.exists():
                 # Encode sample
-                from .transcoding_engine import build_encode_cmd
+                from ..processing.transcoding_engine import build_encode_cmd
                 encode_cmd = build_encode_cmd(sample_file, encoded_sample, encoder, 
                                             encoder_type, optimal_qp, preserve_hdr)
                 result = run_command(encode_cmd)

@@ -13,20 +13,9 @@ import re
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple, Union
 
-from .media_utils import ffprobe_field
-from .system_utils import run_command
+from ..analysis.media_utils import ffprobe_field
+from ..system.system_utils import run_command
 from typing import Dict, Any, List, Optional, Tuple, Union
-
-
-def ffprobe_field(path: Path, field: str) -> Optional[str]:
-    """Extract a field from ffprobe output."""
-    try:
-        cmd = ["ffprobe", "-v", "quiet", "-select_streams", "v:0", 
-               "-show_entries", f"stream={field}", "-of", "csv=p=0", str(path)]
-        result = os.popen(" ".join(cmd)).read().strip()
-        return result if result and result != "unknown" else None
-    except:
-        return None
 
 
 def _extract_hdr_metadata(infile: Path) -> Tuple[Optional[str], Optional[str]]:

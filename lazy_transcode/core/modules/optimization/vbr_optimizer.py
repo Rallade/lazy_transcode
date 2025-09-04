@@ -37,12 +37,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import List, Tuple, Optional, Dict, Any, Union
 
-from .system_utils import TEMP_FILES, DEBUG, format_size, temporary_file, run_command, file_exists
-from .media_utils import get_duration_sec, compute_vmaf_score, ffprobe_field, get_video_dimensions
+from ..system.system_utils import TEMP_FILES, DEBUG, format_size, temporary_file, run_command, file_exists
+from ..analysis.media_utils import get_duration_sec, compute_vmaf_score, ffprobe_field, get_video_dimensions
 from .quality_rate_predictor import get_quality_rate_predictor
-from .content_analyzer import get_content_analyzer
+from ..analysis.content_analyzer import get_content_analyzer
 from .resolution_optimizer import get_resolution_optimizer
-from ...utils.logging import get_logger
+from ..config.encoder_config import EncoderConfigBuilder
+from ....utils.logging import get_logger
 
 try:
     from tqdm import tqdm
@@ -547,34 +548,35 @@ def get_intelligent_bounds(infile: Path, target_vmaf: float, preset: str,
     
     # Preset-specific bounds calculation with encoder type optimization
     if preset == "fast":
-        # Fast preset bounds
+        # Fast preset bounds - FIXED: Use overlapping ranges so higher VMAF targets can find low bitrates
         if target_vmaf >= 95:
-            base_min = max(int(source_bitrate_kbps * 0.45 * hw_efficiency), 1800)
+            base_min = max(int(source_bitrate_kbps * 0.20 * hw_efficiency), 800)  # Allow low exploration
             base_max = int(source_bitrate_kbps * 0.75 * hw_efficiency)
         elif target_vmaf >= 90:
-            base_min = max(int(source_bitrate_kbps * 0.30 * hw_efficiency), 1200)
+            base_min = max(int(source_bitrate_kbps * 0.20 * hw_efficiency), 800)  # Same as VMAF 85
             base_max = int(source_bitrate_kbps * 0.55 * hw_efficiency)
         else:
             base_min = max(int(source_bitrate_kbps * 0.20 * hw_efficiency), 800)
             base_max = int(source_bitrate_kbps * 0.45 * hw_efficiency)
     elif preset == "medium":
-        # Medium preset bounds
+        # Medium preset bounds - FIXED: Use overlapping ranges so higher VMAF targets can find low bitrates
         if target_vmaf >= 95:
-            base_min = max(int(source_bitrate_kbps * 0.35 * hw_efficiency), 1500)
+            # Allow exploration down to efficient encoding ranges
+            base_min = max(int(source_bitrate_kbps * 0.15 * hw_efficiency), 800)  # Same low bound as VMAF 85
             base_max = int(source_bitrate_kbps * 0.65 * hw_efficiency)
         elif target_vmaf >= 90:
-            base_min = max(int(source_bitrate_kbps * 0.25 * hw_efficiency), 1000)
+            base_min = max(int(source_bitrate_kbps * 0.15 * hw_efficiency), 800)  # Same low bound as VMAF 85
             base_max = int(source_bitrate_kbps * 0.50 * hw_efficiency)
         else:
             base_min = max(int(source_bitrate_kbps * 0.15 * hw_efficiency), 600)
             base_max = int(source_bitrate_kbps * 0.40 * hw_efficiency)
-    else:  # slow
-        # Slow preset bounds
+    else:  # slow preset
+        # Slow preset bounds - FIXED: Use overlapping ranges so higher VMAF targets can find low bitrates
         if target_vmaf >= 95:
-            base_min = max(int(source_bitrate_kbps * 0.30 * hw_efficiency), 1200)
+            base_min = max(int(source_bitrate_kbps * 0.15 * hw_efficiency), 600)  # Allow very low exploration
             base_max = int(source_bitrate_kbps * 0.60 * hw_efficiency)
         elif target_vmaf >= 90:
-            base_min = max(int(source_bitrate_kbps * 0.20 * hw_efficiency), 800)
+            base_min = max(int(source_bitrate_kbps * 0.15 * hw_efficiency), 600)  # Same as VMAF 85
             base_max = int(source_bitrate_kbps * 0.45 * hw_efficiency)
         else:
             base_min = max(int(source_bitrate_kbps * 0.15 * hw_efficiency), 500)
@@ -792,8 +794,6 @@ def build_vbr_encode_cmd(infile: Path, outfile: Path, encoder: str, encoder_type
     """Build VBR encoding command with proper HDR detection using EncoderConfigBuilder."""
     
     # Use the sophisticated EncoderConfigBuilder which has proper HDR detection
-    from .encoder_config import EncoderConfigBuilder
-    
     builder = EncoderConfigBuilder()
     
     # Get video dimensions for proper encoding
@@ -1963,21 +1963,24 @@ def _bisect_bitrate(infile: Path, encoder: str, encoder_type: str,
                     current_max = max(moderate_target, current_min + 100)
             
             if abs(vmaf_result - target_vmaf) <= vmaf_tolerance:
-                # Target achieved
+                # Target achieved - but keep searching for lower bitrate that still meets target
                 best_bitrate_val = test_bitrate_val
                 best_vmaf = vmaf_result
-                print(f"[VBR-BISECT] Target achieved: {test_bitrate_val}kbps, VMAF {vmaf_result:.2f}")
-                break
+                print(f"[VBR-BISECT] Target achieved: {test_bitrate_val}kbps, VMAF {vmaf_result:.2f} - searching for lower bitrate")
+                # Continue searching lower to find minimum bitrate that meets target
+                current_max = test_bitrate_val
             elif vmaf_result < target_vmaf:
                 # Need higher bitrate
                 current_min = test_bitrate_val
                 if test_bitrate_val >= max_br * 0.95:  # Close to upper bound
                     bounds_hit = True
             else:
-                # VMAF too high, reduce bitrate
+                # VMAF too high, reduce bitrate - keep as potential result and continue searching lower
                 current_max = test_bitrate_val
-                best_bitrate_val = test_bitrate_val  # Keep this as potential result
-                best_vmaf = vmaf_result
+                # Only update best result if this is the first time we exceed target or if it's lower bitrate
+                if best_bitrate_val is None or test_bitrate_val < best_bitrate_val:
+                    best_bitrate_val = test_bitrate_val
+                    best_vmaf = vmaf_result
             
             # ADAPTIVE EARLY TERMINATION: Check for bisection convergence
             range_remaining = current_max - current_min
@@ -1990,9 +1993,10 @@ def _bisect_bitrate(infile: Path, encoder: str, encoder_type: str,
                 vmaf_improvement_needed = abs(vmaf_result - target_vmaf)
                 if vmaf_improvement_needed <= vmaf_tolerance * 0.3:  # Very close to target
                     print(f"[VBR-BISECT] Near-optimal: VMAF {vmaf_result:.2f} within {vmaf_improvement_needed:.2f} of target")
-                    best_bitrate_val = test_bitrate_val
-                    best_vmaf = vmaf_result
-                    break
+                    # Update best result but DON'T break - continue searching for lower bitrate
+                    if best_bitrate_val is None or test_bitrate_val < best_bitrate_val:
+                        best_bitrate_val = test_bitrate_val
+                        best_vmaf = vmaf_result
                     
                     # Early abandonment: progressive thresholds based on expansion factor
                     abandon_threshold = 15.0  # Default for first bounds hit

@@ -24,10 +24,10 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Callable, Any, Union
 from dataclasses import dataclass, field
 
-from .system_utils import DEBUG, run_command, format_size
-from .media_utils import get_video_dimensions, get_duration_sec
-from .vmaf_evaluator import VMAfEvaluator
-from ...utils.logging import get_logger
+from ..system.system_utils import DEBUG, run_command, format_size
+from ..analysis.media_utils import get_video_dimensions, get_duration_sec
+from ..analysis.vmaf_evaluator import VMAfEvaluator
+from ....utils.logging import get_logger
 
 logger = get_logger("gradient_optimizer")
 
@@ -627,8 +627,8 @@ class GradientVBROptimizer:
                                 preserve_hdr: bool = False) -> Any:
         """Evaluate VMAF score at specific bitrate using fast clip-based approach."""
         try:
-            from .media_utils import compute_vmaf_score
-            from .system_utils import TEMP_FILES
+            from ..analysis.media_utils import compute_vmaf_score
+            from ..system.system_utils import TEMP_FILES
             from types import SimpleNamespace
             import tempfile
             

@@ -17,8 +17,8 @@ from dataclasses import dataclass
 from typing import Optional, List, Union, Any
 from tqdm import tqdm
 
-from .system_utils import TEMP_FILES, DEBUG
-from .media_utils import compute_vmaf_score
+from ..system.system_utils import TEMP_FILES, DEBUG
+from ..analysis.media_utils import compute_vmaf_score
 from .transcoding_engine import transcode_file_qp
 
 

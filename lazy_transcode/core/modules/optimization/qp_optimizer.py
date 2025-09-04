@@ -17,9 +17,9 @@ from pathlib import Path
 from typing import List, Tuple, Optional, Dict
 from tqdm import tqdm
 
-from .media_utils import get_duration_sec, compute_vmaf_score
-from .system_utils import TEMP_FILES, DEBUG, run_command
-from .transcoding_engine import build_encode_cmd
+from ..analysis.media_utils import get_duration_sec, compute_vmaf_score
+from ..system.system_utils import TEMP_FILES, DEBUG, run_command
+from ..processing.transcoding_engine import build_encode_cmd
 from .vbr_optimizer import warn_hardware_encoder_inefficiency
 
 

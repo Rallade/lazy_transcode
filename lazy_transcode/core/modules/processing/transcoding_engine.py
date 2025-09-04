@@ -16,8 +16,9 @@ import time
 from pathlib import Path
 from typing import List, Optional
 
-from .system_utils import DEBUG, get_next_transcoded_dir, run_command
-from .vbr_optimizer import build_vbr_encode_cmd  # canonical import now; tests should patch here
+from ..system.system_utils import DEBUG, get_next_transcoded_dir, run_command
+from ..analysis.media_utils import get_video_codec  # Re-export for tests
+from ..optimization.vbr_optimizer import build_vbr_encode_cmd  # canonical import now; tests should patch here
 
 
 def _log_input_streams(input_file: Path):

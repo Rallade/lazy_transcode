@@ -28,9 +28,9 @@ from pathlib import Path
 from typing import Tuple, Optional, Dict, List
 from dataclasses import dataclass
 
-from .system_utils import TEMP_FILES, run_command
+from ..system.system_utils import TEMP_FILES, run_command
 from .media_utils import get_duration_sec, ffprobe_field, get_video_dimensions
-from ...utils.logging import get_logger
+from ....utils.logging import get_logger
 
 logger = get_logger()
 

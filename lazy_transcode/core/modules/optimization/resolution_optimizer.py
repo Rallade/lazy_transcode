@@ -22,8 +22,8 @@ from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import dataclass
 import math
 
-from .media_utils import ffprobe_field, get_video_dimensions
-from ...utils.logging import get_logger
+from ..analysis.media_utils import ffprobe_field, get_video_dimensions
+from ....utils.logging import get_logger
 
 logger = get_logger()
 

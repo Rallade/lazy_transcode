@@ -15,14 +15,14 @@ import time
 import sys
 from pathlib import Path
 
-from ...utils.logging import get_logger
+from ....utils.logging import get_logger
 
 logger = get_logger("media_utils")
 from functools import lru_cache
 from typing import Optional, Tuple
 from tqdm import tqdm
 
-from .system_utils import TEMP_FILES, DEBUG, start_cpu_monitor, run_command
+from ..system.system_utils import TEMP_FILES, DEBUG, start_cpu_monitor, run_command
 
 
 def ffprobe_field(file: Path, key: str) -> str | None:

@@ -18,8 +18,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Set, Tuple, Dict, Any
 
-from .system_utils import run_command
-from ...utils.logging import get_logger
+from ..system.system_utils import run_command
+from ....utils.logging import get_logger
 
 # Module logger
 logger = get_logger("file_manager")
@@ -97,13 +97,22 @@ class FileManager:
     def _is_sample_or_artifact(self, file_path: Path) -> bool:
         """Check if file is a sample clip or encoding artifact."""
         stem = file_path.stem.lower()
+        
+        # More specific patterns to avoid false positives with legitimate titles
         return any([
             ".sample_clip" in stem,
-            "_sample" in stem,
+            stem.endswith("_sample"),  # More specific than "_sample" in stem
             ".clip" in stem and ".sample" in stem,  # cascading clip artifacts
-            stem.count(".sample") > 0,  # any .sample artifacts
-            stem.count(".clip") > 0,    # any .clip artifacts
+            # Only match .sample when it's clearly an artifact pattern
+            stem.endswith(".sample"),  # files ending with .sample
+            stem == "sample",  # exact match for generic sample files
+            "_sample" in stem and any(x in stem for x in [".clip", "_qp", "vbr_"]),  # sample with encoding artifacts
             "_qp" in stem and "_sample" in stem,  # QP test samples
+            # VBR reference and encoded clips (specific patterns)
+            "vbr_ref_clip_" in stem,
+            "vbr_enc_clip_" in stem,
+            # Other specific clip patterns that are artifacts, not titles
+            stem.startswith("clip") and "_" in stem,  # clip1_something, clip2_something
         ])
     
     def check_codec_and_filter(self, files: List[Path]) -> Tuple[List[Path], List[Tuple[Path, str]]]:

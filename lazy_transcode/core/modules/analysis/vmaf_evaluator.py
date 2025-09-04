@@ -23,7 +23,7 @@ from typing import Dict, List, Optional, Set, Tuple, Union
 import threading
 import time
 
-from .system_utils import run_command
+from ..system.system_utils import run_command
 
 
 @dataclass
