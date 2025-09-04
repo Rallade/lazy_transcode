@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 
-from lazy_transcode.core.modules.transcoding_engine import (
+from lazy_transcode.core.modules.processing.transcoding_engine import (
     detect_hdr_content, build_encode_cmd, build_vbr_encode_cmd
 )
 

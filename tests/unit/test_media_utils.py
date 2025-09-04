@@ -11,7 +11,7 @@ import subprocess
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 
-from lazy_transcode.core.modules.media_utils import (
+from lazy_transcode.core.modules.analysis.media_utils import (
     ffprobe_field, get_duration_sec, get_video_codec, 
     should_skip_codec, detect_hevc_encoder, compute_vmaf_score
 )
@@ -91,19 +91,27 @@ class TestMediaUtils(unittest.TestCase):
         result = get_duration_sec(self.test_file)
         self.assertEqual(result, 0.0)
     
-    @patch('subprocess.check_output')
-    def test_get_video_codec_h264(self, mock_check_output):
+    @patch('lazy_transcode.core.modules.media_utils.run_command')
+    def test_get_video_codec_h264(self, mock_run_command):
         """Test video codec detection for H.264."""
-        mock_check_output.return_value = "h264\n"
+        # Mock successful command result
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "h264\n"
+        mock_run_command.return_value = mock_result
         
         result = get_video_codec(self.test_file)
         
         self.assertEqual(result, "h264")
     
-    @patch('subprocess.check_output')
-    def test_get_video_codec_hevc(self, mock_check_output):
+    @patch('lazy_transcode.core.modules.media_utils.run_command')
+    def test_get_video_codec_hevc(self, mock_run_command):
         """Test video codec detection for HEVC."""
-        mock_check_output.return_value = "hevc\n"
+        # Mock successful command result
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "hevc\n"
+        mock_run_command.return_value = mock_result
         
         result = get_video_codec(self.test_file)
         

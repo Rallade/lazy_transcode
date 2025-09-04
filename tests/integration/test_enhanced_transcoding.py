@@ -12,7 +12,7 @@ import subprocess
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock, call
 
-from lazy_transcode.core.modules.transcoding_engine import (
+from lazy_transcode.core.modules.processing.transcoding_engine import (
     _log_input_streams,
     _log_output_streams,
     transcode_file_vbr,

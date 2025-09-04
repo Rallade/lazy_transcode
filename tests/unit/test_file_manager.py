@@ -6,7 +6,7 @@ import shutil
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-from lazy_transcode.core.modules.file_manager import FileManager, FileDiscoveryResult, CodecCheckResult
+from lazy_transcode.core.modules.processing.file_manager import FileManager, FileDiscoveryResult, CodecCheckResult
 
 
 class TestFileManager(unittest.TestCase):

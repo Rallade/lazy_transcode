@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 
-from lazy_transcode.core.modules.system_utils import (
+from lazy_transcode.core.modules.system.system_utils import (
     format_size, get_next_transcoded_dir,
     DEBUG, TEMP_FILES, cleanup_temp_files
 )

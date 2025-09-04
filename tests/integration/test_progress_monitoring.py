@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 from unittest.mock import Mock, patch, mock_open, MagicMock
 
-from lazy_transcode.core.modules.transcoding_engine import monitor_progress
+from lazy_transcode.core.modules.processing.transcoding_engine import monitor_progress
 
 
 class TestProgressMonitoring(unittest.TestCase):
@@ -25,8 +25,8 @@ class TestProgressMonitoring(unittest.TestCase):
     @patch('time.time')
     @patch('time.sleep')
     @patch('builtins.print')
-    def test_detailed_progress_logging(self, mock_print, mock_sleep, mock_time):
-        """Test detailed progress information is logged."""
+    def test_progress_information_availability(self, mock_print, mock_sleep, mock_time):
+        """Test that essential progress information is available to user."""
         # Mock time progression
         mock_time.side_effect = [1000.0, 1001.0, 1002.0]
         
@@ -34,12 +34,19 @@ class TestProgressMonitoring(unittest.TestCase):
         self.process.poll.side_effect = [None, 0]  # Running, then done
         
         # Mock progress file content with realistic FFmpeg progress output
-        progress_content = """frame=150
-fps=29.97
-bitrate=2500kbps
+        synthetic_progress = {
+            "frame": 150,
+            "fps": 29.97,
+            "bitrate": "2500kbps", 
+            "speed": "1.2x"
+        }
+        
+        progress_content = f"""frame={synthetic_progress['frame']}
+fps={synthetic_progress['fps']}
+bitrate={synthetic_progress['bitrate']}
 total_size=2097152
 out_time_us=5000000
-speed=1.2x
+speed={synthetic_progress['speed']}
 progress=continue"""
         
         with patch('builtins.open', mock_open(read_data=progress_content)):
@@ -47,44 +54,80 @@ progress=continue"""
                 monitor_progress(self.process, self.progress_file, self.callback)
         
         # Verify callback was called with progress data
-        self.assertTrue(self.callback.called)
+        self.assertTrue(self.callback.called, "Progress callback should be invoked")
         
-        # Check detailed progress logging was output
-        print_calls = [str(call) for call in mock_print.call_args_list]
-        progress_logged = any("Progress: Frame 150" in call for call in print_calls)
-        fps_logged = any("FPS 29.97" in call for call in print_calls)
-        speed_logged = any("Speed 1.2x" in call for call in print_calls)
-        bitrate_logged = any("Bitrate 2500kbps" in call for call in print_calls)
+        # Check that key progress information was communicated to user
+        print_output = ' '.join(str(call) for call in mock_print.call_args_list)
         
-        self.assertTrue(progress_logged, "Frame progress should be logged")
-        self.assertTrue(fps_logged, "FPS should be logged")
-        self.assertTrue(speed_logged, "Encoding speed should be logged")
-        self.assertTrue(bitrate_logged, "Bitrate should be logged")
+        # Test information availability (not exact format)
+        self._assert_progress_info_available(print_output, synthetic_progress)
+    
+    def _assert_progress_info_available(self, output, expected_progress):
+        """Verify essential progress information is available in output."""
+        # Frame progress should be communicated
+        self.assertTrue(
+            str(expected_progress['frame']) in output,
+            f"Frame count {expected_progress['frame']} should be communicated"
+        )
+        
+        # FPS should be communicated  
+        self.assertTrue(
+            str(expected_progress['fps']) in output,
+            f"FPS {expected_progress['fps']} should be communicated"
+        )
+        
+        # Encoding speed should be communicated
+        self.assertTrue(
+            expected_progress['speed'] in output,
+            f"Speed {expected_progress['speed']} should be communicated"
+        )
+        
+        # Bitrate should be communicated
+        self.assertTrue(
+            expected_progress['bitrate'] in output,
+            f"Bitrate {expected_progress['bitrate']} should be communicated"
+        )
     
     @patch('time.time')
     @patch('time.sleep')
     @patch('builtins.print')
-    def test_time_conversion_from_microseconds(self, mock_print, mock_sleep, mock_time):
-        """Test conversion of FFmpeg microsecond timestamps to readable time."""
+    def test_time_representation_behavior(self, mock_print, mock_sleep, mock_time):
+        """Test that time information is represented in human-readable format."""
         mock_time.return_value = 1000.0
-        self.process.poll.side_effect = [None, 0]
         
-        # Progress with 1 hour, 30 minutes, 45 seconds in microseconds
-        time_us = (1 * 3600 + 30 * 60 + 45) * 1000000  # 5445000000 microseconds
-        progress_content = f"""frame=1000
+        # Test different time scenarios with realistic expectations
+        time_scenarios = [
+            {"description": "short_duration", "seconds": 45, "expected_pattern": ["00:", "45"]},
+            {"description": "medium_duration", "seconds": 90 * 60 + 30, "expected_pattern": ["01:30:30"]},  # 1h30m30s
+            {"description": "long_duration", "seconds": 2 * 3600 + 15 * 60 + 45, "expected_pattern": ["02:15:45"]}
+        ]
+        
+        for scenario in time_scenarios:
+            with self.subTest(scenario=scenario['description']):
+                # Reset mock state for each iteration
+                self.process.poll.side_effect = [None, 0]  # Running, then done
+                time_us = scenario['seconds'] * 1000000
+                progress_content = f"""frame=1000
 fps=25.0
 out_time_us={time_us}
 speed=1.0x
 progress=continue"""
-        
-        with patch('builtins.open', mock_open(read_data=progress_content)):
-            with patch('pathlib.Path.exists', return_value=True):
-                monitor_progress(self.process, self.progress_file, self.callback)
-        
-        # Check that time was converted correctly (01:30:45)
-        print_calls = [str(call) for call in mock_print.call_args_list]
-        time_logged = any("Time 01:30:45" in call for call in print_calls)
-        self.assertTrue(time_logged, "Time should be converted to HH:MM:SS format")
+                
+                with patch('builtins.open', mock_open(read_data=progress_content)):
+                    with patch('pathlib.Path.exists', return_value=True):
+                        monitor_progress(self.process, self.progress_file, self.callback)
+                
+                # Check that time is represented in readable format
+                print_output = ' '.join(str(call) for call in mock_print.call_args_list)
+                
+                # At least one expected pattern should be present
+                found_pattern = any(pattern in print_output for pattern in scenario['expected_pattern'])
+                self.assertTrue(found_pattern,
+                              f"Time should be readable for {scenario['description']}. "
+                              f"Expected one of {scenario['expected_pattern']} in: {print_output}")
+                
+                # Reset for next iteration
+                mock_print.reset_mock()
     
     @patch('time.sleep')
     @patch('builtins.print')

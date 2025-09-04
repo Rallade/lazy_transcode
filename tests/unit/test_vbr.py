@@ -117,7 +117,7 @@ class TestVBRIntegration(unittest.TestCase):
     
     def test_vbr_with_encoder_config(self):
         """Test VBR integration with EncoderConfigBuilder."""
-        from lazy_transcode.core.modules.encoder_config import EncoderConfigBuilder
+        from lazy_transcode.core.modules.config.encoder_config import EncoderConfigBuilder
         
         builder = EncoderConfigBuilder()
         
@@ -139,7 +139,7 @@ class TestVBRIntegration(unittest.TestCase):
     
     def test_vbr_with_vmaf_evaluator(self):
         """Test VBR integration with VMAfEvaluator."""
-        from lazy_transcode.core.modules.vmaf_evaluator import VMAfEvaluator
+        from lazy_transcode.core.modules.analysis.vmaf_evaluator import VMAfEvaluator
         
         evaluator = VMAfEvaluator(debug=False)
         

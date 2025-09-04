@@ -2,7 +2,7 @@
 
 import unittest
 from pathlib import Path
-from lazy_transcode.core.modules.encoder_config import EncoderConfigBuilder
+from lazy_transcode.core.modules.config.encoder_config import EncoderConfigBuilder
 
 
 class TestEncoderConfigBuilder(unittest.TestCase):

@@ -9,11 +9,11 @@ import unittest
 import sys
 from pathlib import Path
 
-# Add the lazy_transcode package to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Add the project root directory to path (two levels up from tests/utils/)
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 # Import all test modules
-from tests.test_enhanced_transcoding import (
+from tests.integration.test_enhanced_transcoding import (
     TestStreamAnalysisLogging,
     TestEnhancedVBRTranscoding, 
     TestProgressMonitoring as TestProgressMonitoringBasic,
@@ -21,14 +21,14 @@ from tests.test_enhanced_transcoding import (
     TestProgressFileHandling
 )
 
-from tests.test_stream_preservation import (
+from tests.integration.test_stream_preservation import (
     TestEncoderConfigBuilderStreamPreservation,
     TestVBROptimizerIntegration,
     TestStreamPreservationCommand,
     TestErrorHandlingInStreamPreservation
 )
 
-from tests.test_progress_monitoring import (
+from tests.integration.test_progress_monitoring import (
     TestProgressMonitoring,
     TestProgressDataParsing
 )

@@ -115,8 +115,8 @@ def validate_core_functionality():
     
     try:
         # Test imports
-        from lazy_transcode.core.modules.transcoding_engine import transcode_file_vbr
-        from lazy_transcode.core.modules.vbr_optimizer import build_vbr_encode_cmd
+        from lazy_transcode.core.modules.processing.transcoding_engine import transcode_file_vbr
+        from lazy_transcode.core.modules.optimization.vbr_optimizer import build_vbr_encode_cmd
         print("✅ Core modules import successfully")
         
         # Test command generation
