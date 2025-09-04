@@ -29,32 +29,38 @@ class TestStreamPreservationRegression(unittest.TestCase):
         input_file = Path("test.mkv")
         output_file = Path("output.mkv")
         
-        with patch('lazy_transcode.core.modules.optimization.vbr_optimizer.build_vbr_encode_cmd') as mock_comprehensive:
+        with patch('lazy_transcode.core.modules.processing.transcoding_engine.build_vbr_encode_cmd') as mock_comprehensive:
             with patch('subprocess.Popen') as mock_popen:
                 with patch('pathlib.Path.exists', return_value=True):
                     with patch('pathlib.Path.mkdir'):
-                        
-                        # Mock successful process
-                        mock_process = Mock()
-                        mock_process.communicate.return_value = ("", "")
-                        mock_process.returncode = 0
-                        mock_popen.return_value = mock_process
-                        
-                        # Mock comprehensive command with stream preservation
-                        comprehensive_cmd = [
-                            'ffmpeg', '-y', '-i', str(input_file),
-                            '-map', '0',              # All streams
-                            '-map_metadata', '0',     # Metadata
-                            '-map_chapters', '0',     # Chapters
-                            '-c:v', 'libx265',        # Video
-                            '-c:a', 'copy',          # Audio
-                            '-c:s', 'copy',          # Subtitles
-                            '-c:d', 'copy',          # Data
-                            '-c:t', 'copy',          # Timecode
-                            '-copy_unknown',         # Unknown
-                            str(output_file)
-                        ]
-                        mock_comprehensive.return_value = comprehensive_cmd
+                        with patch('lazy_transcode.core.modules.analysis.media_utils.subprocess.check_output') as mock_check_output:
+                            
+                            # Mock ffprobe calls
+                            mock_check_output.return_value = "yuv420p"
+                            
+                            # Mock successful process with context manager support
+                            mock_process = Mock()
+                            mock_process.communicate.return_value = ("", "")
+                            mock_process.returncode = 0
+                            mock_process.__enter__ = Mock(return_value=mock_process)
+                            mock_process.__exit__ = Mock(return_value=None)
+                            mock_popen.return_value = mock_process
+                            
+                            # Mock comprehensive command with stream preservation
+                            comprehensive_cmd = [
+                                'ffmpeg', '-y', '-i', str(input_file),
+                                '-map', '0',              # All streams
+                                '-map_metadata', '0',     # Metadata
+                                '-map_chapters', '0',     # Chapters
+                                '-c:v', 'libx265',        # Video
+                                '-c:a', 'copy',          # Audio
+                                '-c:s', 'copy',          # Subtitles
+                                '-c:d', 'copy',          # Data
+                                '-c:t', 'copy',          # Timecode
+                                '-copy_unknown',         # Unknown
+                                str(output_file)
+                            ]
+                            mock_comprehensive.return_value = comprehensive_cmd
                         
                         # Call the function
                         result = transcode_file_vbr(
@@ -66,17 +72,24 @@ class TestStreamPreservationRegression(unittest.TestCase):
                         mock_comprehensive.assert_called_once()
                         
                         # Verify the command passed to Popen includes stream preservation
-                        mock_popen.assert_called_once()
-                        actual_cmd = mock_popen.call_args[0][0]
+                        # Find the ffmpeg call among multiple Popen calls
+                        ffmpeg_call = None
+                        for call in mock_popen.call_args_list:
+                            if call[0] and 'ffmpeg' in str(call[0][0]):
+                                ffmpeg_call = call[0][0]
+                                break
+                        
+                        self.assertIsNotNone(ffmpeg_call, "FFmpeg command not found in Popen calls")
+                        assert ffmpeg_call is not None  # Type checker assertion
                         
                         # These assertions would have FAILED with the old bug
-                        self.assertIn('-map', actual_cmd)
-                        self.assertIn('0', actual_cmd)
-                        self.assertIn('-map_metadata', actual_cmd)
-                        self.assertIn('-map_chapters', actual_cmd)
-                        self.assertIn('-c:a', actual_cmd)
-                        self.assertIn('copy', actual_cmd)
-                        self.assertIn('-c:s', actual_cmd)
+                        self.assertIn('-map', ffmpeg_call)
+                        self.assertIn('0', ffmpeg_call)
+                        self.assertIn('-map_metadata', ffmpeg_call)
+                        self.assertIn('-map_chapters', ffmpeg_call)
+                        self.assertIn('-c:a', ffmpeg_call)
+                        self.assertIn('copy', ffmpeg_call)
+                        self.assertIn('-c:s', ffmpeg_call)
                         
                         self.assertTrue(result)
 
@@ -96,18 +109,20 @@ class TestCommandGenerationIntegration(unittest.TestCase):
         
         # Don't mock the command generation - test the real pipeline
         with patch('subprocess.Popen') as mock_popen:
-            with patch('lazy_transcode.core.modules.encoder_config.ffprobe_field') as mock_ffprobe:
-                with patch('lazy_transcode.core.modules.encoder_config.os.cpu_count', return_value=8):
+            with patch('lazy_transcode.core.modules.analysis.media_utils.subprocess.check_output') as mock_check_output:
+                with patch('os.cpu_count', return_value=8):
                     with patch('pathlib.Path.exists', return_value=True):
                         with patch('pathlib.Path.mkdir'):
                             
-                            # Mock ffprobe
-                            mock_ffprobe.return_value = "yuv420p"
+                            # Mock ffprobe calls
+                            mock_check_output.return_value = "yuv420p"
                             
-                            # Mock successful process
+                            # Mock successful process with context manager support
                             mock_process = Mock()
                             mock_process.communicate.return_value = ("", "")
                             mock_process.returncode = 0
+                            mock_process.__enter__ = Mock(return_value=mock_process)
+                            mock_process.__exit__ = Mock(return_value=None)
                             mock_popen.return_value = mock_process
                             
                             # Call the actual function - no mocking of command generation
@@ -116,10 +131,17 @@ class TestCommandGenerationIntegration(unittest.TestCase):
                                 5000, 4000, preserve_hdr_metadata=False
                             )
                             
-                            # Verify subprocess was called with comprehensive command
-                            mock_popen.assert_called_once()
-                            actual_cmd = mock_popen.call_args[0][0]
-                            cmd_str = ' '.join(actual_cmd)
+                            # Verify subprocess was called multiple times (as expected)
+                            self.assertGreater(mock_popen.call_count, 0, "Expected at least one subprocess call")
+                            
+                            # Find the main ffmpeg transcoding command
+                            ffmpeg_calls = [call for call in mock_popen.call_args_list 
+                                          if len(call[0]) > 0 and len(call[0][0]) > 0 and 'ffmpeg' in call[0][0][0]]
+                            
+                            self.assertEqual(len(ffmpeg_calls), 1, "Expected exactly one ffmpeg transcoding command")
+                            
+                            actual_cmd = ffmpeg_calls[0][0][0]
+                            cmd_str = ' '.join(str(arg) for arg in actual_cmd)
                             
                             # These are the critical assertions that would catch the bug
                             self.assertIn('ffmpeg', cmd_str)
@@ -154,15 +176,19 @@ class TestCommandGenerationIntegration(unittest.TestCase):
                 output_file = Path(f"output_{encoder}.mkv")
                 
                 with patch('subprocess.Popen') as mock_popen:
-                    with patch('lazy_transcode.core.modules.encoder_config.ffprobe_field') as mock_ffprobe:
+                    with patch('lazy_transcode.core.modules.analysis.media_utils.subprocess.check_output') as mock_check_output:
                         with patch('pathlib.Path.exists', return_value=True):
                             with patch('pathlib.Path.mkdir'):
                                 
-                                mock_ffprobe.return_value = "yuv420p"
+                                # Mock ffprobe calls
+                                mock_check_output.return_value = "yuv420p"
                                 
+                                # Mock successful process with context manager support
                                 mock_process = Mock()
                                 mock_process.communicate.return_value = ("", "")
                                 mock_process.returncode = 0
+                                mock_process.__enter__ = Mock(return_value=mock_process)
+                                mock_process.__exit__ = Mock(return_value=None)
                                 mock_popen.return_value = mock_process
                                 
                                 transcode_file_vbr(
@@ -170,12 +196,20 @@ class TestCommandGenerationIntegration(unittest.TestCase):
                                     5000, 4000
                                 )
                                 
-                                # Verify stream preservation for this encoder
-                                actual_cmd = mock_popen.call_args[0][0]
-                                cmd_str = ' '.join(actual_cmd)
+                                # Find the ffmpeg command among all Popen calls
+                                ffmpeg_cmd = None
+                                for call_args in mock_popen.call_args_list:
+                                    cmd = call_args[0][0]
+                                    if isinstance(cmd, list) and len(cmd) > 0 and 'ffmpeg' in cmd[0]:
+                                        ffmpeg_cmd = cmd
+                                        break
                                 
-                                # Critical: ALL encoders must preserve streams
-                                self.assertIn('-map 0', cmd_str, f"{encoder} missing stream mapping")
+                                self.assertIsNotNone(ffmpeg_cmd, f"No ffmpeg command found for {encoder}")
+                                if ffmpeg_cmd:
+                                    cmd_str = ' '.join(str(arg) for arg in ffmpeg_cmd)
+                                    
+                                    # Critical: ALL encoders must preserve streams
+                                    self.assertIn('-map 0', cmd_str, f"{encoder} missing stream mapping")
                                 self.assertIn('-c:a copy', cmd_str, f"{encoder} missing audio copy")
                                 self.assertIn('-c:s copy', cmd_str, f"{encoder} missing subtitle copy")
 
@@ -279,21 +313,33 @@ class TestModuleIntegrationPoints(unittest.TestCase):
             self.fail(f"Import error: {e}")
         
         # Test that transcode_file_vbr can access the comprehensive builder
-        with patch('lazy_transcode.core.modules.optimization.vbr_optimizer.build_vbr_encode_cmd') as mock_builder:
-            with patch('subprocess.Popen'):
-                with patch('builtins.print'):  # Suppress logging output
-                    
-                    mock_builder.return_value = ['ffmpeg', '-i', 'test.mkv', 'out.mkv']
-                    
-                    try:
-                        transcode_file_vbr(
-                            Path("test.mkv"), Path("out.mkv"), 
-                            "libx265", "software", 5000, 4000
-                        )
-                        # If we get here, the import and call worked
-                        mock_builder.assert_called_once()
-                    except Exception as e:
-                        self.fail(f"Integration failed: {e}")
+        with patch('lazy_transcode.core.modules.processing.transcoding_engine.build_vbr_encode_cmd') as mock_builder:
+            with patch('subprocess.Popen') as mock_popen:
+                with patch('lazy_transcode.core.modules.analysis.media_utils.subprocess.check_output') as mock_check_output:
+                    with patch('builtins.print'):  # Suppress logging output
+                        
+                        # Mock ffprobe calls
+                        mock_check_output.return_value = "yuv420p"
+                        
+                        # Mock successful process with context manager support
+                        mock_process = Mock()
+                        mock_process.communicate.return_value = ("", "")
+                        mock_process.returncode = 0
+                        mock_process.__enter__ = Mock(return_value=mock_process)
+                        mock_process.__exit__ = Mock(return_value=None)
+                        mock_popen.return_value = mock_process
+                        
+                        mock_builder.return_value = ['ffmpeg', '-i', 'test.mkv', 'out.mkv']
+                        
+                        try:
+                            transcode_file_vbr(
+                                Path("test.mkv"), Path("out.mkv"),
+                                "libx265", "software", 5000, 4000
+                            )
+                            # If we get here, the import and call worked
+                            mock_builder.assert_called_once()
+                        except Exception as e:
+                            self.fail(f"Integration failed: {e}")
     
     def test_encoder_config_builder_is_accessible_from_vbr_optimizer(self):
         """
@@ -339,15 +385,19 @@ class TestRealWorldScenarios(unittest.TestCase):
         output_file = Path("Demon_Slayer_S01E01_transcoded.mkv")
         
         with patch('subprocess.Popen') as mock_popen:
-            with patch('lazy_transcode.core.modules.encoder_config.ffprobe_field') as mock_ffprobe:
+            with patch('lazy_transcode.core.modules.analysis.media_utils.subprocess.check_output') as mock_check_output:
                 with patch('pathlib.Path.exists', return_value=True):
                     with patch('pathlib.Path.mkdir'):
                         
-                        mock_ffprobe.return_value = "yuv420p"
+                        # Mock ffprobe calls
+                        mock_check_output.return_value = "yuv420p"
                         
+                        # Mock successful process with context manager support
                         mock_process = Mock()
                         mock_process.communicate.return_value = ("", "")
                         mock_process.returncode = 0
+                        mock_process.__enter__ = Mock(return_value=mock_process)
+                        mock_process.__exit__ = Mock(return_value=None)
                         mock_popen.return_value = mock_process
                         
                         result = transcode_file_vbr(
@@ -355,12 +405,20 @@ class TestRealWorldScenarios(unittest.TestCase):
                             5000, 4000, preserve_hdr_metadata=False
                         )
                         
-                        # Get the actual command that would be executed
-                        actual_cmd = mock_popen.call_args[0][0]
-                        cmd_str = ' '.join(actual_cmd)
+                        # Find the ffmpeg command among all Popen calls
+                        ffmpeg_cmd = None
+                        for call_args in mock_popen.call_args_list:
+                            cmd = call_args[0][0]
+                            if isinstance(cmd, list) and len(cmd) > 0 and 'ffmpeg' in cmd[0]:
+                                ffmpeg_cmd = cmd
+                                break
                         
-                        # Verify it would preserve multiple audio tracks
-                        self.assertIn('-map 0', cmd_str, "Must map all streams")
+                        self.assertIsNotNone(ffmpeg_cmd, "No ffmpeg command found")
+                        if ffmpeg_cmd:
+                            cmd_str = ' '.join(str(arg) for arg in ffmpeg_cmd)
+                            
+                            # Verify it would preserve multiple audio tracks
+                            self.assertIn('-map 0', cmd_str, "Must map all streams")
                         self.assertIn('-c:a copy', cmd_str, "Must copy audio tracks")
                         self.assertIn('-c:s copy', cmd_str, "Must copy subtitle tracks")
                         self.assertIn('-map_chapters 0', cmd_str, "Must copy chapters")
@@ -379,15 +437,19 @@ class TestRealWorldScenarios(unittest.TestCase):
         output_file = Path("Movie_2023_4K_transcoded.mkv")
         
         with patch('subprocess.Popen') as mock_popen:
-            with patch('lazy_transcode.core.modules.encoder_config.ffprobe_field') as mock_ffprobe:
+            with patch('lazy_transcode.core.modules.analysis.media_utils.subprocess.check_output') as mock_check_output:
                 with patch('pathlib.Path.exists', return_value=True):
                     with patch('pathlib.Path.mkdir'):
                         
-                        mock_ffprobe.return_value = "yuv420p10le"  # 10-bit content
+                        # Mock ffprobe calls
+                        mock_check_output.return_value = "yuv420p10le"  # 10-bit content
                         
+                        # Mock successful process with context manager support
                         mock_process = Mock()
                         mock_process.communicate.return_value = ("", "")
                         mock_process.returncode = 0
+                        mock_process.__enter__ = Mock(return_value=mock_process)
+                        mock_process.__exit__ = Mock(return_value=None)
                         mock_popen.return_value = mock_process
                         
                         result = transcode_file_vbr(
@@ -395,23 +457,32 @@ class TestRealWorldScenarios(unittest.TestCase):
                             8000, 6000, preserve_hdr_metadata=True
                         )
                         
-                        actual_cmd = mock_popen.call_args[0][0]
-                        cmd_str = ' '.join(actual_cmd)
+                        # Find the ffmpeg command among all Popen calls
+                        ffmpeg_cmd = None
+                        for call_args in mock_popen.call_args_list:
+                            cmd = call_args[0][0]
+                            if isinstance(cmd, list) and len(cmd) > 0 and 'ffmpeg' in cmd[0]:
+                                ffmpeg_cmd = cmd
+                                break
                         
-                        # Must preserve ALL content types
-                        essential_preservation = [
-                            '-map 0',           # All streams
-                            '-map_metadata 0',  # Metadata
-                            '-map_chapters 0',  # Chapters
-                            '-c:a copy',        # Audio (including commentary)
-                            '-c:s copy',        # Subtitles (all languages)
-                            '-c:d copy',        # Data streams
-                            '-copy_unknown'     # Unknown streams
-                        ]
-                        
-                        for pattern in essential_preservation:
-                            self.assertIn(pattern, cmd_str, 
-                                        f"Missing essential preservation: {pattern}")
+                        self.assertIsNotNone(ffmpeg_cmd, "No ffmpeg command found")
+                        if ffmpeg_cmd:
+                            cmd_str = ' '.join(str(arg) for arg in ffmpeg_cmd)
+                            
+                            # Must preserve ALL content types
+                            essential_preservation = [
+                                '-map 0',           # All streams
+                                '-map_metadata 0',  # Metadata
+                                '-map_chapters 0',  # Chapters
+                                '-c:a copy',        # Audio (including commentary)
+                                '-c:s copy',        # Subtitles (all languages)
+                                '-c:d copy',        # Data streams
+                                '-copy_unknown'     # Unknown streams
+                            ]
+                            
+                            for pattern in essential_preservation:
+                                self.assertIn(pattern, cmd_str,
+                                            f"Missing essential preservation: {pattern}")
                         
                         self.assertTrue(result)
 

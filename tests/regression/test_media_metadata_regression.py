@@ -2,7 +2,30 @@
 Media Metadata Extraction Regression Tests
 
 These tests prevent critical bugs in media metadata extraction that could cause:
-- Wrong codec detection leading to incorrect processing decisions
+- Wrong codec detection            # Request different fields
+            codec = ffprobe_field(test_file, "codec_name")
+            width = ffprobe_field(test_file, "width") 
+            duration = ffprobe_field(test_file, "format=duration")
+            
+            self.assertEqual(codec, "h264", "Codec field should be correct")
+            self.assertEqual(width, "1920", "Width field should be correct")
+            self.a                    # Extract all metadata
+                    codec = get_video_codec(test_file)
+                    dimensions = get_video_dimensions(test_file)
+                    duration = get_duration_sec(test_file)
+                    pixel_format = ffprobe_field(test_file, "pix_fmt")
+                    bitrate = ffprobe_field(test_file, "bit_rate")
+                    
+                    # Verify all metadata is correct
+                    self.assertEqual(codec, "h264", "Codec should be h264")
+                    self.assertEqual(dimensions, (1920, 1080), "Dimensions should be 1920x1080")
+                    self.assertEqual(duration, 7200.123, "Duration should be 7200.123")
+                    self.assertEqual(pixel_format, "yuv420p", "Pixel format should be yuv420p")ration, "7200.0", "Duration field should be correct")
+            
+            # Cache consistency check - second calls should return same values
+            codec_cached = ffprobe_field(test_file, "codec_name")
+            width_cached = ffprobe_field(test_file, "width")
+            duration_cached = ffprobe_field(test_file, "format=duration")ncorrect processing decisions
 - Incorrect duration affecting progress tracking and clip extraction
 - Wrong resolution leading to encoding failures
 - Cache corruption causing metadata mix-ups between files
@@ -12,6 +35,7 @@ The media utilities are foundational to all transcoding operations.
 
 import unittest
 import tempfile
+import subprocess
 from pathlib import Path
 from unittest.mock import patch, MagicMock, call
 from functools import lru_cache
@@ -44,41 +68,37 @@ class TestFFprobeFieldRegression(unittest.TestCase):
         file2 = Path("/fake/file2.mkv") 
         file3 = Path("/fake/file3.mp4")
         
-        with patch('lazy_transcode.core.modules.analysis.media_utils.subprocess.run') as mock_run:
+        with patch('lazy_transcode.core.modules.analysis.media_utils.subprocess.check_output') as mock_check_output:
             # Set up different responses for each file
             def mock_ffprobe_responses(cmd, **kwargs):
                 file_path = cmd[cmd.index('-i') + 1]
-                mock_result = MagicMock()
-                mock_result.returncode = 0
                 
                 if 'file1.mkv' in file_path:
-                    mock_result.stdout = "1920x1080"
+                    return "1920"
                 elif 'file2.mkv' in file_path:
-                    mock_result.stdout = "1280x720"
+                    return "1280"
                 elif 'file3.mp4' in file_path:
-                    mock_result.stdout = "3840x2160"
+                    return "3840"
                 else:
-                    mock_result.stdout = "unknown"
-                
-                return mock_result
+                    return "unknown"
             
-            mock_run.side_effect = mock_ffprobe_responses
+            mock_check_output.side_effect = mock_ffprobe_responses
             
             # Request metadata multiple times in different orders
             for _ in range(3):  # Multiple iterations to test cache behavior
-                result1 = ffprobe_field(file1, "stream=width,height")
-                result2 = ffprobe_field(file2, "stream=width,height") 
-                result3 = ffprobe_field(file3, "stream=width,height")
+                result1 = ffprobe_field(file1, "width")
+                result2 = ffprobe_field(file2, "width") 
+                result3 = ffprobe_field(file3, "width")
                 
                 # Each file should always return its own metadata
                 with self.subTest(iteration=_, file="file1"):
-                    self.assertEqual(result1, "1920x1080", "File1 should always return 1920x1080")
+                    self.assertEqual(result1, "1920", "File1 width should always return 1920")
                 
                 with self.subTest(iteration=_, file="file2"):
-                    self.assertEqual(result2, "1280x720", "File2 should always return 1280x720")
+                    self.assertEqual(result2, "1280", "File2 width should always return 1280")
                 
                 with self.subTest(iteration=_, file="file3"):
-                    self.assertEqual(result3, "3840x2160", "File3 should always return 3840x2160")
+                    self.assertEqual(result3, "3840", "File3 width should always return 3840")
     
     def test_ffprobe_handles_identical_filenames_in_different_paths(self):
         """
@@ -89,33 +109,29 @@ class TestFFprobeFieldRegression(unittest.TestCase):
         file1 = Path("/path1/episode01.mkv")
         file2 = Path("/path2/episode01.mkv")  # Same filename, different path
         
-        with patch('lazy_transcode.core.modules.analysis.media_utils.subprocess.run') as mock_run:
+        with patch('lazy_transcode.core.modules.analysis.media_utils.subprocess.check_output') as mock_check_output:
             def mock_different_paths(cmd, **kwargs):
                 file_path = cmd[cmd.index('-i') + 1]
-                mock_result = MagicMock()
-                mock_result.returncode = 0
                 
-                if '/path1/' in file_path:
-                    mock_result.stdout = "h264"
-                elif '/path2/' in file_path:
-                    mock_result.stdout = "hevc"
+                if 'path1' in file_path:
+                    return "h264"
+                elif 'path2' in file_path:
+                    return "hevc"
                 else:
-                    mock_result.stdout = "unknown"
-                
-                return mock_result
+                    return "unknown"
             
-            mock_run.side_effect = mock_different_paths
+            mock_check_output.side_effect = mock_different_paths
             
             # Get codec for both files
-            codec1 = ffprobe_field(file1, "stream=codec_name")
-            codec2 = ffprobe_field(file2, "stream=codec_name")
+            codec1 = ffprobe_field(file1, "codec_name")
+            codec2 = ffprobe_field(file2, "codec_name")
             
             self.assertEqual(codec1, "h264", "Path1 file should return h264")
             self.assertEqual(codec2, "hevc", "Path2 file should return hevc")
             
             # Test cache consistency with multiple calls
-            codec1_cached = ffprobe_field(file1, "stream=codec_name")
-            codec2_cached = ffprobe_field(file2, "stream=codec_name")
+            codec1_cached = ffprobe_field(file1, "codec_name")
+            codec2_cached = ffprobe_field(file2, "codec_name")
             
             self.assertEqual(codec1_cached, "h264", "Cached path1 should still return h264")
             self.assertEqual(codec2_cached, "hevc", "Cached path2 should still return hevc")
@@ -128,18 +144,14 @@ class TestFFprobeFieldRegression(unittest.TestCase):
         """
         test_file = Path("/fake/corrupted.mkv")
         
-        with patch('lazy_transcode.core.modules.analysis.media_utils.subprocess.run') as mock_run:
+        with patch('lazy_transcode.core.modules.analysis.media_utils.subprocess.check_output') as mock_check_output:
             # Mock ffprobe failure
-            mock_result = MagicMock()
-            mock_result.returncode = 1
-            mock_result.stdout = ""
-            mock_result.stderr = "Input/output error"
-            mock_run.return_value = mock_result
+            mock_check_output.side_effect = subprocess.CalledProcessError(1, ['ffprobe'], "Input/output error")
             
             # Multiple calls should all return None consistently
             for i in range(3):
                 with self.subTest(call=i):
-                    result = ffprobe_field(test_file, "stream=codec_name")
+                    result = ffprobe_field(test_file, "codec_name")
                     self.assertIsNone(result, f"Error case should always return None (call {i})")
     
     def test_ffprobe_different_fields_are_cached_separately(self):
@@ -150,42 +162,37 @@ class TestFFprobeFieldRegression(unittest.TestCase):
         """
         test_file = Path("/fake/test.mkv")
         
-        with patch('lazy_transcode.core.modules.analysis.media_utils.subprocess.run') as mock_run:
+        with patch('lazy_transcode.core.modules.analysis.media_utils.subprocess.check_output') as mock_check_output:
             def mock_field_specific_response(cmd, **kwargs):
-                mock_result = MagicMock()
-                mock_result.returncode = 0
-                
                 # Check which field is being requested
                 cmd_str = ' '.join(cmd)
                 if 'codec_name' in cmd_str:
-                    mock_result.stdout = "h264"
-                elif 'width,height' in cmd_str:
-                    mock_result.stdout = "1920x1080"
+                    return "h264"
+                elif 'width' in cmd_str:
+                    return "1920"
                 elif 'duration' in cmd_str:
-                    mock_result.stdout = "7200.0"
+                    return "7200.0"
                 else:
-                    mock_result.stdout = "unknown"
-                
-                return mock_result
+                    return "unknown"
             
-            mock_run.side_effect = mock_field_specific_response
+            mock_check_output.side_effect = mock_field_specific_response
             
             # Request different fields
-            codec = ffprobe_field(test_file, "stream=codec_name")
-            dimensions = ffprobe_field(test_file, "stream=width,height") 
+            codec = ffprobe_field(test_file, "codec_name")
+            width = ffprobe_field(test_file, "width") 
             duration = ffprobe_field(test_file, "format=duration")
             
             self.assertEqual(codec, "h264", "Codec field should be correct")
-            self.assertEqual(dimensions, "1920x1080", "Dimensions field should be correct")
+            self.assertEqual(width, "1920", "Width field should be correct")
             self.assertEqual(duration, "7200.0", "Duration field should be correct")
             
             # Verify each field is cached independently
-            codec_cached = ffprobe_field(test_file, "stream=codec_name")
-            dimensions_cached = ffprobe_field(test_file, "stream=width,height")
+            codec_cached = ffprobe_field(test_file, "codec_name")
+            width_cached = ffprobe_field(test_file, "width")
             duration_cached = ffprobe_field(test_file, "format=duration")
             
             self.assertEqual(codec_cached, "h264", "Cached codec should be consistent")
-            self.assertEqual(dimensions_cached, "1920x1080", "Cached dimensions should be consistent")
+            self.assertEqual(width_cached, "1920", "Cached width should be consistent")
             self.assertEqual(duration_cached, "7200.0", "Cached duration should be consistent")
 
 
@@ -199,6 +206,8 @@ class TestVideoDimensionsRegression(unittest.TestCase):
     def setUp(self):
         """Clear caches before each test."""
         get_video_dimensions.cache_clear()
+        # Also clear ffprobe cache to ensure clean state
+        ffprobe_field.cache_clear()
     
     def test_video_dimensions_handles_all_common_resolutions(self):
         """
@@ -220,7 +229,15 @@ class TestVideoDimensionsRegression(unittest.TestCase):
                 test_file = Path(f"/fake/{resolution_str.replace('x', '_')}.mkv")
                 
                 with patch('lazy_transcode.core.modules.analysis.media_utils.ffprobe_field') as mock_ffprobe:
-                    mock_ffprobe.return_value = resolution_str
+                    def mock_resolution_field(file, field):
+                        width, height = resolution_str.split('x')
+                        if field == "width":
+                            return width
+                        elif field == "height":
+                            return height
+                        return "unknown"
+                    
+                    mock_ffprobe.side_effect = mock_resolution_field
                     
                     result = get_video_dimensions(test_file)
                     self.assertEqual(result, expected_tuple,
@@ -271,19 +288,31 @@ class TestVideoDimensionsRegression(unittest.TestCase):
         file1 = Path("/fake/hd.mkv")
         file2 = Path("/fake/uhd.mkv")
         
-        with patch('lazy_transcode.core.modules.analysis.media_utils.ffprobe_field') as mock_ffprobe:
-            def mock_resolution_responses(file_path, field):
-                if 'hd.mkv' in str(file_path):
-                    return "1920x1080"
-                elif 'uhd.mkv' in str(file_path):
-                    return "3840x2160"
-                else:
-                    return "unknown"
+        with patch('lazy_transcode.core.modules.analysis.media_utils.subprocess.check_output') as mock_check_output:
+            def mock_resolution_responses(cmd, **kwargs):
+                file_path = cmd[cmd.index('-i') + 1]
+                field = cmd[cmd.index('-show_entries') + 1].split('=')[1]
+                
+                if '/fake/hd.mkv' in file_path or '\\fake\\hd.mkv' in file_path:
+                    if field == "width":
+                        return "1920"
+                    elif field == "height":
+                        return "1080"
+                elif '/fake/uhd.mkv' in file_path or '\\fake\\uhd.mkv' in file_path:
+                    if field == "width":
+                        return "3840"
+                    elif field == "height":
+                        return "2160"
+                return "unknown"
             
-            mock_ffprobe.side_effect = mock_resolution_responses
+            mock_check_output.side_effect = mock_resolution_responses
             
             # Get dimensions multiple times
             for i in range(3):
+                # Clear cache to ensure fresh calls (simulate real-world usage)
+                get_video_dimensions.cache_clear()
+                ffprobe_field.cache_clear()
+                
                 dims1 = get_video_dimensions(file1)
                 dims2 = get_video_dimensions(file2)
                 
@@ -321,8 +350,8 @@ class TestDurationExtractionRegression(unittest.TestCase):
             with self.subTest(duration=duration_str):
                 test_file = Path(f"/fake/duration_{duration_str.replace('.', '_')}.mkv")
                 
-                with patch('lazy_transcode.core.modules.analysis.media_utils.ffprobe_field') as mock_ffprobe:
-                    mock_ffprobe.return_value = duration_str
+                with patch('lazy_transcode.core.modules.analysis.media_utils.subprocess.check_output') as mock_check_output:
+                    mock_check_output.return_value = duration_str
                     
                     result = get_duration_sec(test_file)
                     self.assertAlmostEqual(result, expected_seconds, places=5,
@@ -369,16 +398,17 @@ class TestDurationExtractionRegression(unittest.TestCase):
         short_file = Path("/fake/short_clip.mkv")
         long_file = Path("/fake/full_movie.mkv")
         
-        with patch('lazy_transcode.core.modules.analysis.media_utils.ffprobe_field') as mock_ffprobe:
-            def mock_duration_responses(file_path, field):
-                if 'short_clip.mkv' in str(file_path):
+        with patch('lazy_transcode.core.modules.analysis.media_utils.subprocess.check_output') as mock_check_output:
+            def mock_duration_responses(cmd, **kwargs):
+                file_path = cmd[cmd.index('-i') + 1]
+                if 'short_clip.mkv' in file_path:
                     return "60.0"  # 1 minute
-                elif 'full_movie.mkv' in str(file_path):
+                elif 'full_movie.mkv' in file_path:
                     return "7200.0"  # 2 hours
                 else:
                     return "0.0"
             
-            mock_ffprobe.side_effect = mock_duration_responses
+            mock_check_output.side_effect = mock_duration_responses
             
             # Test multiple times to ensure cache consistency
             for i in range(3):
@@ -524,18 +554,52 @@ class TestMetadataExtractionIntegration(unittest.TestCase):
             "format=bit_rate": "5000000",
         }
         
-        with patch('lazy_transcode.core.modules.analysis.media_utils.ffprobe_field') as mock_ffprobe:
-            def mock_metadata_response(file_path, field):
-                return mock_responses.get(field, "unknown")
+        # Clear all caches to ensure fresh state
+        ffprobe_field.cache_clear()
+        get_video_dimensions.cache_clear()
+        get_duration_sec.cache_clear()
+        
+        with patch('lazy_transcode.core.modules.analysis.media_utils.run_command') as mock_run_command, \
+             patch('lazy_transcode.core.modules.analysis.media_utils.subprocess.check_output') as mock_check_output:
             
-            mock_ffprobe.side_effect = mock_metadata_response
+            # Mock get_video_codec calls
+            def mock_metadata_response(cmd, **kwargs):
+                from unittest.mock import MagicMock
+                mock_result = MagicMock()
+                mock_result.returncode = 0
+                
+                if 'codec_name' in ' '.join(cmd):
+                    mock_result.stdout = "h264"
+                else:
+                    mock_result.stdout = "unknown"
+                return mock_result
+            
+            mock_run_command.side_effect = mock_metadata_response
+            
+            # Mock subprocess for both ffprobe_field and duration calls
+            def mock_subprocess_response(cmd, **kwargs):
+                cmd_str = ' '.join(cmd)
+                if 'pix_fmt' in cmd_str:
+                    return "yuv420p"
+                elif 'width' in cmd_str:
+                    return "1920"
+                elif 'height' in cmd_str:
+                    return "1080"
+                elif 'bit_rate' in cmd_str:
+                    return "5000000"
+                elif 'duration' in cmd_str:
+                    return "7200.123"
+                else:
+                    return "unknown"
+            
+            mock_check_output.side_effect = mock_subprocess_response
             
             # Extract all metadata
             codec = get_video_codec(test_file)
             dimensions = get_video_dimensions(test_file)
             duration = get_duration_sec(test_file)
-            pixel_format = ffprobe_field(test_file, "stream=pix_fmt")
-            bitrate = ffprobe_field(test_file, "format=bit_rate")
+            pixel_format = ffprobe_field(test_file, "pix_fmt")
+            bitrate = ffprobe_field(test_file, "bit_rate")
             
             # Verify all metadata is correct
             self.assertEqual(codec, "h264", "Codec should be h264")
@@ -573,43 +637,85 @@ class TestMetadataExtractionIntegration(unittest.TestCase):
             str(files[2]): {"codec": "av1", "dimensions": (7680, 4320), "duration": 3600.0},
         }
         
-        def mock_file_specific_metadata(file_path, field):
-            file_str = str(file_path)
-            metadata = expected_metadata.get(file_str, {})
-            
-            if field == "stream=codec_name":
-                return metadata.get("codec", "unknown")
-            elif field == "stream=width,height":
-                dims = metadata.get("dimensions", (0, 0))
-                return f"{dims[0]}x{dims[1]}"
-            elif field == "format=duration":
-                return str(metadata.get("duration", 0.0))
-            else:
-                return "unknown"
-        
-        with patch('lazy_transcode.core.modules.analysis.media_utils.ffprobe_field') as mock_ffprobe:
-            mock_ffprobe.side_effect = mock_file_specific_metadata
-            
-            # Extract metadata for all files multiple times in random order
-            import random
-            for iteration in range(3):
-                shuffled_files = files.copy()
-                random.shuffle(shuffled_files)
+        with patch('lazy_transcode.core.modules.analysis.media_utils.run_command') as mock_run_command:
+            # Mock get_video_codec calls
+            def mock_codec_response(cmd, **kwargs):
+                from unittest.mock import MagicMock
+                mock_result = MagicMock()
+                mock_result.returncode = 0
                 
-                for file_path in shuffled_files:
-                    expected = expected_metadata[str(file_path)]
+                file_path = cmd[-1]  # Last argument is the file path
+                if 'anime_episode.mkv' in file_path:
+                    mock_result.stdout = "h264"
+                elif 'movie_bluray.mkv' in file_path:
+                    mock_result.stdout = "hevc"
+                elif 'documentary_4k.mp4' in file_path:
+                    mock_result.stdout = "av1"
+                else:
+                    mock_result.stdout = "unknown"
+                return mock_result
+            
+            mock_run_command.side_effect = mock_codec_response
+            
+            # Mock ffprobe_field for dimensions
+            with patch('lazy_transcode.core.modules.analysis.media_utils.ffprobe_field') as mock_ffprobe:
+                def mock_ffprobe_response(file_path, field):
+                    file_str = str(file_path)
                     
-                    codec = get_video_codec(file_path)
-                    dimensions = get_video_dimensions(file_path)
-                    duration = get_duration_sec(file_path)
+                    if 'anime_episode.mkv' in file_str:
+                        if field == "width":
+                            return "1920"
+                        elif field == "height":
+                            return "1080"
+                    elif 'movie_bluray.mkv' in file_str:
+                        if field == "width":
+                            return "3840"
+                        elif field == "height":
+                            return "2160"
+                    elif 'documentary_4k.mp4' in file_str:
+                        if field == "width":
+                            return "7680"
+                        elif field == "height":
+                            return "4320"
+                    return "unknown"
+                
+                mock_ffprobe.side_effect = mock_ffprobe_response
+                
+                # Mock subprocess for duration
+                with patch('lazy_transcode.core.modules.analysis.media_utils.subprocess.check_output') as mock_check_output:
+                    def mock_duration_response(cmd, **kwargs):
+                        file_path = cmd[cmd.index('-i') + 1]
+                        
+                        if 'anime_episode.mkv' in file_path:
+                            return "1440.0"
+                        elif 'movie_bluray.mkv' in file_path:
+                            return "7200.0"
+                        elif 'documentary_4k.mp4' in file_path:
+                            return "3600.0"
+                        return "0.0"
                     
-                    with self.subTest(iteration=iteration, file=file_path.name):
-                        self.assertEqual(codec, expected["codec"],
-                                       f"{file_path.name} codec should be {expected['codec']}")
-                        self.assertEqual(dimensions, expected["dimensions"],
-                                       f"{file_path.name} dimensions should be {expected['dimensions']}")
-                        self.assertAlmostEqual(duration, expected["duration"], places=1,
-                                             msg=f"{file_path.name} duration should be {expected['duration']}")
+                    mock_check_output.side_effect = mock_duration_response
+                    
+                    # Extract metadata for all files multiple times in random order
+                    import random
+                    for iteration in range(3):
+                        shuffled_files = files.copy()
+                        random.shuffle(shuffled_files)
+                        
+                        for file_path in shuffled_files:
+                            expected = expected_metadata[str(file_path)]
+                            
+                            codec = get_video_codec(file_path)
+                            dimensions = get_video_dimensions(file_path)
+                            duration = get_duration_sec(file_path)
+                            
+                            with self.subTest(iteration=iteration, file=file_path.name):
+                                self.assertEqual(codec, expected["codec"],
+                                               f"{file_path.name} codec should be {expected['codec']}")
+                                self.assertEqual(dimensions, expected["dimensions"],
+                                               f"{file_path.name} dimensions should be {expected['dimensions']}")
+                                self.assertAlmostEqual(duration, expected["duration"], places=1,
+                                                     msg=f"{file_path.name} duration should be {expected['duration']}")
 
 
 if __name__ == '__main__':
