@@ -11,8 +11,8 @@ import re
 from pathlib import Path
 from unittest.mock import patch
 
-from lazy_transcode.core.modules.encoder_config import EncoderConfigBuilder
-from lazy_transcode.core.modules.vbr_optimizer import build_vbr_encode_cmd
+from lazy_transcode.core.modules.config.encoder_config import EncoderConfigBuilder
+from lazy_transcode.core.modules.optimization.vbr_optimizer import build_vbr_encode_cmd
 
 
 class TestFFmpegCommandValidation(unittest.TestCase):
@@ -29,8 +29,8 @@ class TestFFmpegCommandValidation(unittest.TestCase):
         This test would have caught the original bug by verifying that
         ALL required flags are present in the generated command.
         """
-        with patch('lazy_transcode.core.modules.encoder_config.ffprobe_field') as mock_ffprobe:
-            with patch('lazy_transcode.core.modules.encoder_config.os.cpu_count', return_value=8):
+        with patch('lazy_transcode.core.modules.config.encoder_config.ffprobe_field') as mock_ffprobe:
+            with patch('lazy_transcode.core.modules.config.encoder_config.os.cpu_count', return_value=8):
                 mock_ffprobe.return_value = "yuv420p"
                 
                 cmd = self.builder.build_vbr_encode_cmd(
@@ -64,8 +64,8 @@ class TestFFmpegCommandValidation(unittest.TestCase):
         """
         SYNTAX TEST: Validate command follows proper FFmpeg syntax rules.
         """
-        with patch('lazy_transcode.core.modules.encoder_config.ffprobe_field') as mock_ffprobe:
-            with patch('lazy_transcode.core.modules.encoder_config.os.cpu_count', return_value=8):
+        with patch('lazy_transcode.core.modules.config.encoder_config.ffprobe_field') as mock_ffprobe:
+            with patch('lazy_transcode.core.modules.config.encoder_config.os.cpu_count', return_value=8):
                 mock_ffprobe.return_value = "yuv420p"
                 
                 cmd = self.builder.build_vbr_encode_cmd(
@@ -109,8 +109,8 @@ class TestFFmpegCommandValidation(unittest.TestCase):
         
         This catches cases where contradictory flags might cause issues.
         """
-        with patch('lazy_transcode.core.modules.encoder_config.ffprobe_field') as mock_ffprobe:
-            with patch('lazy_transcode.core.modules.encoder_config.os.cpu_count', return_value=8):
+        with patch('lazy_transcode.core.modules.config.encoder_config.ffprobe_field') as mock_ffprobe:
+            with patch('lazy_transcode.core.modules.config.encoder_config.os.cpu_count', return_value=8):
                 mock_ffprobe.return_value = "yuv420p"
                 
                 cmd = self.builder.build_vbr_encode_cmd(
@@ -140,7 +140,7 @@ class TestFFmpegCommandValidation(unittest.TestCase):
         This ensures the VBR optimizer (which should be used) generates
         comprehensive commands with full stream preservation.
         """
-        with patch('lazy_transcode.core.modules.vbr_optimizer.get_video_dimensions') as mock_dims:
+        with patch('lazy_transcode.core.modules.analysis.media_utils.get_video_dimensions') as mock_dims:
             mock_dims.return_value = (1920, 1080)
             
             cmd = build_vbr_encode_cmd(
@@ -172,8 +172,8 @@ class TestStreamPreservationPatterns(unittest.TestCase):
         """
         builder = EncoderConfigBuilder()
         
-        with patch('lazy_transcode.core.modules.encoder_config.ffprobe_field') as mock_ffprobe:
-            with patch('lazy_transcode.core.modules.encoder_config.os.cpu_count', return_value=8):
+        with patch('lazy_transcode.core.modules.config.encoder_config.ffprobe_field') as mock_ffprobe:
+            with patch('lazy_transcode.core.modules.config.encoder_config.os.cpu_count', return_value=8):
                 mock_ffprobe.return_value = "yuv420p"
                 
                 cmd = builder.build_vbr_encode_cmd(
@@ -196,8 +196,8 @@ class TestStreamPreservationPatterns(unittest.TestCase):
         """
         builder = EncoderConfigBuilder()
         
-        with patch('lazy_transcode.core.modules.encoder_config.ffprobe_field') as mock_ffprobe:
-            with patch('lazy_transcode.core.modules.encoder_config.os.cpu_count', return_value=8):
+        with patch('lazy_transcode.core.modules.config.encoder_config.ffprobe_field') as mock_ffprobe:
+            with patch('lazy_transcode.core.modules.config.encoder_config.os.cpu_count', return_value=8):
                 mock_ffprobe.return_value = "yuv420p"
                 
                 cmd = builder.build_vbr_encode_cmd(
@@ -228,8 +228,8 @@ class TestStreamPreservationPatterns(unittest.TestCase):
         """
         builder = EncoderConfigBuilder()
         
-        with patch('lazy_transcode.core.modules.encoder_config.ffprobe_field') as mock_ffprobe:
-            with patch('lazy_transcode.core.modules.encoder_config.os.cpu_count', return_value=8):
+        with patch('lazy_transcode.core.modules.config.encoder_config.ffprobe_field') as mock_ffprobe:
+            with patch('lazy_transcode.core.modules.config.encoder_config.os.cpu_count', return_value=8):
                 mock_ffprobe.return_value = "yuv420p"
                 
                 cmd = builder.build_vbr_encode_cmd(
@@ -263,7 +263,7 @@ class TestHardwareEncoderStreamPreservation(unittest.TestCase):
         """Test NVIDIA NVENC preserves all streams."""
         builder = EncoderConfigBuilder()
         
-        with patch('lazy_transcode.core.modules.encoder_config.ffprobe_field') as mock_ffprobe:
+        with patch('lazy_transcode.core.modules.config.encoder_config.ffprobe_field') as mock_ffprobe:
             mock_ffprobe.return_value = "yuv420p"
             
             cmd = builder.build_vbr_encode_cmd(
@@ -284,7 +284,7 @@ class TestHardwareEncoderStreamPreservation(unittest.TestCase):
         """Test AMD AMF preserves all streams."""
         builder = EncoderConfigBuilder()
         
-        with patch('lazy_transcode.core.modules.encoder_config.ffprobe_field') as mock_ffprobe:
+        with patch('lazy_transcode.core.modules.config.encoder_config.ffprobe_field') as mock_ffprobe:
             mock_ffprobe.return_value = "yuv420p"
             
             cmd = builder.build_vbr_encode_cmd(
@@ -305,7 +305,7 @@ class TestHardwareEncoderStreamPreservation(unittest.TestCase):
         """Test Intel QuickSync preserves all streams."""
         builder = EncoderConfigBuilder()
         
-        with patch('lazy_transcode.core.modules.encoder_config.ffprobe_field') as mock_ffprobe:
+        with patch('lazy_transcode.core.modules.config.encoder_config.ffprobe_field') as mock_ffprobe:
             mock_ffprobe.return_value = "yuv420p"
             
             cmd = builder.build_vbr_encode_cmd(
@@ -333,8 +333,8 @@ class TestCommandGenerationConsistency(unittest.TestCase):
         builder = EncoderConfigBuilder()
         bitrates = [1000, 5000, 10000, 20000]  # Different bitrate scenarios
         
-        with patch('lazy_transcode.core.modules.encoder_config.ffprobe_field') as mock_ffprobe:
-            with patch('lazy_transcode.core.modules.encoder_config.os.cpu_count', return_value=8):
+        with patch('lazy_transcode.core.modules.config.encoder_config.ffprobe_field') as mock_ffprobe:
+            with patch('lazy_transcode.core.modules.config.encoder_config.os.cpu_count', return_value=8):
                 mock_ffprobe.return_value = "yuv420p"
                 
                 for bitrate in bitrates:
@@ -363,8 +363,8 @@ class TestCommandGenerationConsistency(unittest.TestCase):
             (3840, 2160),   # 4K
         ]
         
-        with patch('lazy_transcode.core.modules.encoder_config.ffprobe_field') as mock_ffprobe:
-            with patch('lazy_transcode.core.modules.encoder_config.os.cpu_count', return_value=8):
+        with patch('lazy_transcode.core.modules.config.encoder_config.ffprobe_field') as mock_ffprobe:
+            with patch('lazy_transcode.core.modules.config.encoder_config.os.cpu_count', return_value=8):
                 mock_ffprobe.return_value = "yuv420p"
                 
                 for width, height in resolutions:
@@ -392,8 +392,8 @@ class TestCommandGenerationEdgeCases(unittest.TestCase):
         """
         builder = EncoderConfigBuilder()
         
-        with patch('lazy_transcode.core.modules.encoder_config.ffprobe_field') as mock_ffprobe:
-            with patch('lazy_transcode.core.modules.encoder_config.os.cpu_count', return_value=8):
+        with patch('lazy_transcode.core.modules.config.encoder_config.ffprobe_field') as mock_ffprobe:
+            with patch('lazy_transcode.core.modules.config.encoder_config.os.cpu_count', return_value=8):
                 mock_ffprobe.return_value = "yuv420p10le"  # 10-bit HDR
                 
                 cmd = builder.build_vbr_encode_cmd(
@@ -419,8 +419,8 @@ class TestCommandGenerationEdgeCases(unittest.TestCase):
         """
         builder = EncoderConfigBuilder()
         
-        with patch('lazy_transcode.core.modules.encoder_config.ffprobe_field') as mock_ffprobe:
-            with patch('lazy_transcode.core.modules.encoder_config.os.cpu_count', return_value=8):
+        with patch('lazy_transcode.core.modules.config.encoder_config.ffprobe_field') as mock_ffprobe:
+            with patch('lazy_transcode.core.modules.config.encoder_config.os.cpu_count', return_value=8):
                 mock_ffprobe.return_value = "yuv420p"
                 
                 cmd = builder.build_vbr_encode_cmd(
