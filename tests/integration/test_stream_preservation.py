@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 
-from lazy_transcode.core.modules.encoder_config import EncoderConfigBuilder
+from lazy_transcode.core.modules.config.encoder_config import EncoderConfigBuilder
 
 
 class TestEncoderConfigBuilderStreamPreservation(unittest.TestCase):
@@ -75,8 +75,8 @@ class TestEncoderConfigBuilderStreamPreservation(unittest.TestCase):
         # Should use custom mapping
         self.assertIn('-map 0:v:0', cmd_str)
         self.assertIn('-map 0:a:0', cmd_str)
-        # Should not include default comprehensive mapping
-        self.assertNotIn('-map 0', cmd_str)
+        # Should not include default comprehensive mapping (space after to avoid false positives)
+        self.assertNotIn('-map 0 ', cmd_str)
     
     def test_hardware_encoder_stream_preservation(self):
         """Test stream preservation with hardware encoders."""
@@ -123,11 +123,11 @@ class TestEncoderConfigBuilderStreamPreservation(unittest.TestCase):
 class TestVBROptimizerIntegration(unittest.TestCase):
     """Test VBR optimizer integration with comprehensive encoder."""
     
-    @patch('lazy_transcode.core.modules.vbr_optimizer.EncoderConfigBuilder')
-    @patch('lazy_transcode.core.modules.vbr_optimizer.get_video_dimensions')
+    @patch('lazy_transcode.core.modules.optimization.vbr_optimizer.EncoderConfigBuilder')
+    @patch('lazy_transcode.core.modules.optimization.vbr_optimizer.get_video_dimensions')
     def test_vbr_optimizer_uses_comprehensive_builder(self, mock_get_dims, mock_builder_class):
         """Test that VBR optimizer uses the comprehensive EncoderConfigBuilder."""
-        from lazy_transcode.core.modules.vbr_optimizer import build_vbr_encode_cmd
+        from lazy_transcode.core.modules.optimization.vbr_optimizer import build_vbr_encode_cmd
         
         # Setup mocks
         mock_get_dims.return_value = (1920, 1080)

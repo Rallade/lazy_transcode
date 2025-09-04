@@ -16,7 +16,7 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock, call
 from functools import lru_cache
 
-from lazy_transcode.core.modules.media_utils import (
+from lazy_transcode.core.modules.analysis.media_utils import (
     ffprobe_field, get_video_dimensions, get_duration_sec, get_video_codec
 )
 
@@ -44,7 +44,7 @@ class TestFFprobeFieldRegression(unittest.TestCase):
         file2 = Path("/fake/file2.mkv") 
         file3 = Path("/fake/file3.mp4")
         
-        with patch('lazy_transcode.core.modules.media_utils.subprocess.run') as mock_run:
+        with patch('lazy_transcode.core.modules.analysis.media_utils.subprocess.run') as mock_run:
             # Set up different responses for each file
             def mock_ffprobe_responses(cmd, **kwargs):
                 file_path = cmd[cmd.index('-i') + 1]
@@ -89,7 +89,7 @@ class TestFFprobeFieldRegression(unittest.TestCase):
         file1 = Path("/path1/episode01.mkv")
         file2 = Path("/path2/episode01.mkv")  # Same filename, different path
         
-        with patch('lazy_transcode.core.modules.media_utils.subprocess.run') as mock_run:
+        with patch('lazy_transcode.core.modules.analysis.media_utils.subprocess.run') as mock_run:
             def mock_different_paths(cmd, **kwargs):
                 file_path = cmd[cmd.index('-i') + 1]
                 mock_result = MagicMock()
@@ -128,7 +128,7 @@ class TestFFprobeFieldRegression(unittest.TestCase):
         """
         test_file = Path("/fake/corrupted.mkv")
         
-        with patch('lazy_transcode.core.modules.media_utils.subprocess.run') as mock_run:
+        with patch('lazy_transcode.core.modules.analysis.media_utils.subprocess.run') as mock_run:
             # Mock ffprobe failure
             mock_result = MagicMock()
             mock_result.returncode = 1
@@ -150,7 +150,7 @@ class TestFFprobeFieldRegression(unittest.TestCase):
         """
         test_file = Path("/fake/test.mkv")
         
-        with patch('lazy_transcode.core.modules.media_utils.subprocess.run') as mock_run:
+        with patch('lazy_transcode.core.modules.analysis.media_utils.subprocess.run') as mock_run:
             def mock_field_specific_response(cmd, **kwargs):
                 mock_result = MagicMock()
                 mock_result.returncode = 0
@@ -219,7 +219,7 @@ class TestVideoDimensionsRegression(unittest.TestCase):
             with self.subTest(resolution=resolution_str):
                 test_file = Path(f"/fake/{resolution_str.replace('x', '_')}.mkv")
                 
-                with patch('lazy_transcode.core.modules.media_utils.ffprobe_field') as mock_ffprobe:
+                with patch('lazy_transcode.core.modules.analysis.media_utils.ffprobe_field') as mock_ffprobe:
                     mock_ffprobe.return_value = resolution_str
                     
                     result = get_video_dimensions(test_file)
@@ -247,7 +247,7 @@ class TestVideoDimensionsRegression(unittest.TestCase):
             with self.subTest(input=repr(malformed_input)):
                 test_file = Path(f"/fake/malformed_{hash(str(malformed_input))}.mkv")
                 
-                with patch('lazy_transcode.core.modules.media_utils.ffprobe_field') as mock_ffprobe:
+                with patch('lazy_transcode.core.modules.analysis.media_utils.ffprobe_field') as mock_ffprobe:
                     mock_ffprobe.return_value = malformed_input
                     
                     # Should not crash - should return some sensible default or raise specific exception
@@ -271,7 +271,7 @@ class TestVideoDimensionsRegression(unittest.TestCase):
         file1 = Path("/fake/hd.mkv")
         file2 = Path("/fake/uhd.mkv")
         
-        with patch('lazy_transcode.core.modules.media_utils.ffprobe_field') as mock_ffprobe:
+        with patch('lazy_transcode.core.modules.analysis.media_utils.ffprobe_field') as mock_ffprobe:
             def mock_resolution_responses(file_path, field):
                 if 'hd.mkv' in str(file_path):
                     return "1920x1080"
@@ -321,7 +321,7 @@ class TestDurationExtractionRegression(unittest.TestCase):
             with self.subTest(duration=duration_str):
                 test_file = Path(f"/fake/duration_{duration_str.replace('.', '_')}.mkv")
                 
-                with patch('lazy_transcode.core.modules.media_utils.ffprobe_field') as mock_ffprobe:
+                with patch('lazy_transcode.core.modules.analysis.media_utils.ffprobe_field') as mock_ffprobe:
                     mock_ffprobe.return_value = duration_str
                     
                     result = get_duration_sec(test_file)
@@ -348,7 +348,7 @@ class TestDurationExtractionRegression(unittest.TestCase):
             with self.subTest(duration=repr(malformed_duration)):
                 test_file = Path(f"/fake/bad_duration_{hash(str(malformed_duration))}.mkv")
                 
-                with patch('lazy_transcode.core.modules.media_utils.ffprobe_field') as mock_ffprobe:
+                with patch('lazy_transcode.core.modules.analysis.media_utils.ffprobe_field') as mock_ffprobe:
                     mock_ffprobe.return_value = malformed_duration
                     
                     try:
@@ -369,7 +369,7 @@ class TestDurationExtractionRegression(unittest.TestCase):
         short_file = Path("/fake/short_clip.mkv")
         long_file = Path("/fake/full_movie.mkv")
         
-        with patch('lazy_transcode.core.modules.media_utils.ffprobe_field') as mock_ffprobe:
+        with patch('lazy_transcode.core.modules.analysis.media_utils.ffprobe_field') as mock_ffprobe:
             def mock_duration_responses(file_path, field):
                 if 'short_clip.mkv' in str(file_path):
                     return "60.0"  # 1 minute
@@ -431,7 +431,7 @@ class TestCodecDetectionRegression(unittest.TestCase):
             with self.subTest(codec=codec_input):
                 test_file = Path(f"/fake/{codec_input}_video.mkv")
                 
-                with patch('lazy_transcode.core.modules.media_utils.run_command') as mock_run:
+                with patch('lazy_transcode.core.modules.analysis.media_utils.run_command') as mock_run:
                     mock_result = MagicMock()
                     mock_result.returncode = 0
                     mock_result.stdout = codec_input
@@ -450,7 +450,7 @@ class TestCodecDetectionRegression(unittest.TestCase):
         """
         test_file = Path("/fake/unreadable.mkv")
         
-        with patch('lazy_transcode.core.modules.media_utils.run_command') as mock_run:
+        with patch('lazy_transcode.core.modules.analysis.media_utils.run_command') as mock_run:
             # Mock ffprobe failure
             mock_result = MagicMock()
             mock_result.returncode = 1
@@ -480,7 +480,7 @@ class TestCodecDetectionRegression(unittest.TestCase):
             with self.subTest(output=repr(malformed_output)):
                 test_file = Path(f"/fake/malformed_{hash(str(malformed_output))}.mkv")
                 
-                with patch('lazy_transcode.core.modules.media_utils.run_command') as mock_run:
+                with patch('lazy_transcode.core.modules.analysis.media_utils.run_command') as mock_run:
                     mock_result = MagicMock()
                     mock_result.returncode = 0
                     mock_result.stdout = malformed_output or ""
@@ -524,7 +524,7 @@ class TestMetadataExtractionIntegration(unittest.TestCase):
             "format=bit_rate": "5000000",
         }
         
-        with patch('lazy_transcode.core.modules.media_utils.ffprobe_field') as mock_ffprobe:
+        with patch('lazy_transcode.core.modules.analysis.media_utils.ffprobe_field') as mock_ffprobe:
             def mock_metadata_response(file_path, field):
                 return mock_responses.get(field, "unknown")
             
@@ -587,7 +587,7 @@ class TestMetadataExtractionIntegration(unittest.TestCase):
             else:
                 return "unknown"
         
-        with patch('lazy_transcode.core.modules.media_utils.ffprobe_field') as mock_ffprobe:
+        with patch('lazy_transcode.core.modules.analysis.media_utils.ffprobe_field') as mock_ffprobe:
             mock_ffprobe.side_effect = mock_file_specific_metadata
             
             # Extract metadata for all files multiple times in random order

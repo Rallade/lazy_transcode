@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-from lazy_transcode.core.modules.system_utils import (
+from lazy_transcode.core.modules.system.system_utils import (
     TEMP_FILES, temporary_file
 )
 

@@ -12,7 +12,7 @@ import subprocess
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock, call
 
-from lazy_transcode.core.modules.transcoding_engine import (
+from lazy_transcode.core.modules.processing.transcoding_engine import (
     _log_input_streams,
     _log_output_streams,
     transcode_file_vbr,
@@ -63,7 +63,7 @@ class TestStreamAnalysisLogging(unittest.TestCase):
             ]
         }
     
-    @patch('lazy_transcode.core.modules.transcoding_engine.run_command')
+    @patch('lazy_transcode.core.modules.processing.transcoding_engine.run_command')
     @patch('builtins.print')
     def test_log_input_streams_success(self, mock_print, mock_run_command):
         """Test successful input stream analysis and logging."""
@@ -92,7 +92,7 @@ class TestStreamAnalysisLogging(unittest.TestCase):
         self.assertTrue(any("Subtitle streams: 2" in str(call) for call in print_calls))
         self.assertTrue(any("Chapters: 2" in str(call) for call in print_calls))
     
-    @patch('lazy_transcode.core.modules.transcoding_engine.run_command')
+    @patch('lazy_transcode.core.modules.processing.transcoding_engine.run_command')
     @patch('builtins.print')
     def test_log_input_streams_error_handling(self, mock_print, mock_run_command):
         """Test error handling in input stream analysis."""
@@ -107,7 +107,7 @@ class TestStreamAnalysisLogging(unittest.TestCase):
         print_calls = mock_print.call_args_list
         self.assertTrue(any("Warning: Could not analyze input streams" in str(call) for call in print_calls))
     
-    @patch('lazy_transcode.core.modules.transcoding_engine.run_command')
+    @patch('lazy_transcode.core.modules.processing.transcoding_engine.run_command')
     @patch('builtins.print')
     def test_log_output_streams_with_size_comparison(self, mock_print, mock_run_command):
         """Test output stream verification with file size comparison."""
@@ -144,10 +144,10 @@ class TestEnhancedVBRTranscoding(unittest.TestCase):
         self.max_bitrate = 5000
         self.avg_bitrate = 4000
     
-    @patch('lazy_transcode.core.modules.transcoding_engine.build_vbr_encode_cmd')
-    @patch('lazy_transcode.core.modules.transcoding_engine._log_input_streams')
-    @patch('lazy_transcode.core.modules.transcoding_engine._log_output_streams')
-    @patch('lazy_transcode.core.modules.transcoding_engine.monitor_progress')
+    @patch('lazy_transcode.core.modules.processing.transcoding_engine.build_vbr_encode_cmd')
+    @patch('lazy_transcode.core.modules.processing.transcoding_engine._log_input_streams')
+    @patch('lazy_transcode.core.modules.processing.transcoding_engine._log_output_streams')
+    @patch('lazy_transcode.core.modules.processing.transcoding_engine.monitor_progress')
     @patch('subprocess.Popen')
     @patch('builtins.print')
     def test_transcode_file_vbr_success(self, mock_print, mock_popen, mock_monitor, 
@@ -167,8 +167,8 @@ class TestEnhancedVBRTranscoding(unittest.TestCase):
         mock_popen.return_value = mock_process
         
         # Mock output file existence
-        with patch.object(self.output_file, 'exists', return_value=True):
-            with patch.object(self.output_file.parent, 'mkdir'):
+        with patch('pathlib.Path.exists', return_value=True):
+            with patch('pathlib.Path.mkdir'):
                 result = transcode_file_vbr(
                     self.input_file, self.output_file, self.encoder, self.encoder_type,
                     self.max_bitrate, self.avg_bitrate, preserve_hdr_metadata=True
@@ -194,7 +194,7 @@ class TestEnhancedVBRTranscoding(unittest.TestCase):
         self.assertTrue(any(f"Target bitrate: {self.avg_bitrate} kbps" in str(call) for call in print_calls))
         self.assertTrue(any("Successfully transcoded" in str(call) for call in print_calls))
     
-    @patch('lazy_transcode.core.modules.transcoding_engine.build_vbr_encode_cmd')
+    @patch('lazy_transcode.core.modules.processing.transcoding_engine.build_vbr_encode_cmd')
     @patch('subprocess.Popen')
     @patch('builtins.print')
     def test_transcode_file_vbr_failure(self, mock_print, mock_popen, mock_build_cmd):
@@ -207,8 +207,8 @@ class TestEnhancedVBRTranscoding(unittest.TestCase):
         mock_process.returncode = 1
         mock_popen.return_value = mock_process
         
-        with patch.object(self.output_file, 'exists', return_value=False):
-            with patch.object(self.output_file.parent, 'mkdir'):
+        with patch('pathlib.Path.exists', return_value=False):
+            with patch('pathlib.Path.mkdir'):
                 result = transcode_file_vbr(
                     self.input_file, self.output_file, self.encoder, self.encoder_type,
                     self.max_bitrate, self.avg_bitrate
@@ -224,7 +224,7 @@ class TestEnhancedVBRTranscoding(unittest.TestCase):
         self.assertTrue(any("STDOUT: stdout output" in str(call) for call in print_calls))
         self.assertTrue(any("STDERR: stderr error message" in str(call) for call in print_calls))
     
-    @patch('lazy_transcode.core.modules.transcoding_engine.build_vbr_encode_cmd')
+    @patch('lazy_transcode.core.modules.processing.transcoding_engine.build_vbr_encode_cmd')
     @patch('subprocess.Popen')
     def test_transcode_file_vbr_progress_tracking(self, mock_popen, mock_build_cmd):
         """Test progress tracking functionality in VBR transcoding."""
@@ -238,9 +238,9 @@ class TestEnhancedVBRTranscoding(unittest.TestCase):
         # Mock progress callback
         progress_callback = Mock()
         
-        with patch.object(self.output_file, 'exists', return_value=True):
-            with patch.object(self.output_file.parent, 'mkdir'):
-                with patch('lazy_transcode.core.modules.transcoding_engine.monitor_progress') as mock_monitor:
+        with patch('pathlib.Path.exists', return_value=True):
+            with patch('pathlib.Path.mkdir'):
+                with patch('lazy_transcode.core.modules.processing.transcoding_engine.monitor_progress') as mock_monitor:
                     transcode_file_vbr(
                         self.input_file, self.output_file, self.encoder, self.encoder_type,
                         self.max_bitrate, self.avg_bitrate,
@@ -284,7 +284,7 @@ progress=continue"""
         mock_file.read.return_value = progress_content
         mock_open.return_value.__enter__.return_value = mock_file
         
-        with patch.object(self.progress_file, 'exists', return_value=True):
+        with patch('pathlib.Path.exists', return_value=True):
             monitor_progress(mock_process, self.progress_file, self.mock_callback)
         
         # Verify callback was called
@@ -304,7 +304,7 @@ progress=continue"""
 class TestStreamPreservationIntegration(unittest.TestCase):
     """Test integration with comprehensive stream preservation."""
     
-    @patch('lazy_transcode.core.modules.transcoding_engine.build_vbr_encode_cmd')
+    @patch('lazy_transcode.core.modules.processing.transcoding_engine.build_vbr_encode_cmd')
     def test_uses_comprehensive_encoder_builder(self, mock_build_cmd):
         """Test that VBR transcoding uses the comprehensive encoder builder."""
         # Mock the comprehensive build command that includes stream preservation
@@ -332,8 +332,8 @@ class TestStreamPreservationIntegration(unittest.TestCase):
             mock_process.returncode = 0
             mock_popen.return_value = mock_process
             
-            with patch.object(output_file, 'exists', return_value=True):
-                with patch.object(output_file.parent, 'mkdir'):
+            with patch('pathlib.Path.exists', return_value=True):
+                with patch('pathlib.Path.mkdir'):
                     transcode_file_vbr(
                         input_file, output_file, "libx265", "software",
                         5000, 4000, preserve_hdr_metadata=True
@@ -362,7 +362,7 @@ class TestProgressFileHandling(unittest.TestCase):
         self.input_file = Path("test.mkv")
         self.output_file = Path("output.mkv")
     
-    @patch('lazy_transcode.core.modules.transcoding_engine.build_vbr_encode_cmd')
+    @patch('lazy_transcode.core.modules.processing.transcoding_engine.build_vbr_encode_cmd')
     @patch('subprocess.Popen')
     def test_progress_file_cleanup(self, mock_popen, mock_build_cmd):
         """Test that progress files are properly cleaned up."""
@@ -379,8 +379,8 @@ class TestProgressFileHandling(unittest.TestCase):
         mock_progress_file = Mock()
         mock_progress_file.exists.return_value = True
         
-        with patch.object(self.output_file, 'exists', return_value=True):
-            with patch.object(self.output_file.parent, 'mkdir'):
+        with patch('pathlib.Path.exists', return_value=True):
+            with patch('pathlib.Path.mkdir'):
                 with patch('tempfile.NamedTemporaryFile') as mock_temp:
                     mock_temp.return_value.__enter__.return_value.name = "progress_test.txt"
                     

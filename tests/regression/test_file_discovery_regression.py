@@ -14,7 +14,7 @@ import os
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-from lazy_transcode.core.modules.file_manager import FileManager, FileDiscoveryResult
+from lazy_transcode.core.modules.processing.file_manager import FileManager, FileDiscoveryResult, CodecCheckResult
 
 
 class TestFileDiscoveryRegression(unittest.TestCase):
@@ -412,17 +412,31 @@ class TestFileProcessingWorkflowIntegration(unittest.TestCase):
             (base_path / filename).touch()
         
         # Mock codec detection
-        def mock_codec_detection(file_path):
+        def mock_codec_check(file_path):
             filename = file_path.name
             if filename in test_files:
                 expected_codec = test_files[filename]
-                mock_result = MagicMock()
-                mock_result.returncode = 0 if expected_codec != "unknown" else 1
-                mock_result.stdout = expected_codec if expected_codec != "unknown" else ""
-                return mock_result
-            return MagicMock(returncode=1, stdout="")
-        
-        with patch('lazy_transcode.core.modules.file_manager.run_command', side_effect=mock_codec_detection):
+                if expected_codec == "hevc" or expected_codec == "av1":
+                    return CodecCheckResult(
+                        codec=expected_codec,
+                        should_skip=True,
+                        reason=f"already {expected_codec}"
+                    )
+                elif expected_codec == "h264":
+                    return CodecCheckResult(
+                        codec=expected_codec,
+                        should_skip=False,
+                        reason=""
+                    )
+                else:  # unknown
+                    return CodecCheckResult(
+                        codec=None,
+                        should_skip=False,
+                        reason="unknown codec - will transcode for safety"
+                    )
+            return CodecCheckResult(codec=None, should_skip=False, reason="unknown")
+
+        with patch.object(self.file_manager, 'check_video_codec', side_effect=mock_codec_check):
             result = self.file_manager.process_files_with_codec_filtering(base_path)
             
             # Should find files that need transcoding (h264 and unknown)

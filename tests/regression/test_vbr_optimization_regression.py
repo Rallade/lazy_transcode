@@ -15,7 +15,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-from lazy_transcode.core.modules.vbr_optimizer import (
+from lazy_transcode.core.modules.optimization.vbr_optimizer import (
     optimize_encoder_settings_vbr, get_research_based_intelligent_bounds,
     extract_clips_parallel, get_intelligent_bounds
 )
@@ -40,10 +40,10 @@ class TestVBRIntelligentBoundsRegression(unittest.TestCase):
         encoder = "libx264" 
         encoder_type = "software"
         
-        with patch('lazy_transcode.core.modules.vbr_optimizer.get_video_duration') as mock_duration:
+        with patch('lazy_transcode.core.modules.optimization.vbr_optimizer.get_video_duration') as mock_duration:
             mock_duration.return_value = 3600.0
             
-            with patch('lazy_transcode.core.modules.media_utils.get_video_dimensions') as mock_dims:
+            with patch('lazy_transcode.core.modules.analysis.media_utils.get_video_dimensions') as mock_dims:
                 mock_dims.return_value = (1920, 1080)
                 
                 # Get bounds multiple times
@@ -80,10 +80,10 @@ class TestVBRIntelligentBoundsRegression(unittest.TestCase):
             with self.subTest(resolution=resolution_name):
                 test_file = Path(f"/fake/{resolution_name}_test.mkv")
                 
-                with patch('lazy_transcode.core.modules.media_utils.get_video_dimensions') as mock_dims:
+                with patch('lazy_transcode.core.modules.analysis.media_utils.get_video_dimensions') as mock_dims:
                     mock_dims.return_value = dimensions
                     
-                    with patch('lazy_transcode.core.modules.vbr_optimizer.get_video_duration') as mock_duration:
+                    with patch('lazy_transcode.core.modules.optimization.vbr_optimizer.get_video_duration') as mock_duration:
                         mock_duration.return_value = 3600.0
                         
                         try:
@@ -113,10 +113,10 @@ class TestVBRIntelligentBoundsRegression(unittest.TestCase):
         test_file = Path("/fake/extreme_vmaf_test.mkv")
         extreme_vmaf_values = [50.0, 75.0, 95.0, 99.0]  # Low to very high quality
         
-        with patch('lazy_transcode.core.modules.media_utils.get_video_dimensions') as mock_dims:
+        with patch('lazy_transcode.core.modules.analysis.media_utils.get_video_dimensions') as mock_dims:
             mock_dims.return_value = (1920, 1080)
             
-            with patch('lazy_transcode.core.modules.vbr_optimizer.get_video_duration') as mock_duration:
+            with patch('lazy_transcode.core.modules.optimization.vbr_optimizer.get_video_duration') as mock_duration:
                 mock_duration.return_value = 3600.0
                 
                 for vmaf in extreme_vmaf_values:
@@ -156,7 +156,7 @@ class TestVBRClipExtractionRegression(unittest.TestCase):
         clip_duration = 30  # 30 seconds
         
         # Mock successful extraction
-        with patch('lazy_transcode.core.modules.vbr_optimizer.extract_single_clip') as mock_extract:
+        with patch('lazy_transcode.core.modules.optimization.vbr_optimizer.extract_single_clip') as mock_extract:
             def mock_successful_extraction(infile, start_time, duration, index):
                 clip_path = infile.parent / f"clip_{index}_{start_time}.mkv"
                 return clip_path, None  # Success, no error
@@ -191,7 +191,7 @@ class TestVBRClipExtractionRegression(unittest.TestCase):
         clip_duration = 30
         
         # Mock mixed success/failure extraction
-        with patch('lazy_transcode.core.modules.vbr_optimizer.extract_single_clip') as mock_extract:
+        with patch('lazy_transcode.core.modules.optimization.vbr_optimizer.extract_single_clip') as mock_extract:
             def mock_mixed_extraction(infile, start_time, duration, index):
                 if start_time == 900:  # Simulate failure at 15min mark
                     return None, "Seek failed"
@@ -267,17 +267,17 @@ class TestVBREncoderOptimizationRegression(unittest.TestCase):
             ("hevc_nvenc", "hardware"),
         ]
         
-        with patch('lazy_transcode.core.modules.media_utils.get_video_dimensions') as mock_dims:
+        with patch('lazy_transcode.core.modules.analysis.media_utils.get_video_dimensions') as mock_dims:
             mock_dims.return_value = (1920, 1080)
             
-            with patch('lazy_transcode.core.modules.vbr_optimizer.get_video_duration') as mock_duration:
+            with patch('lazy_transcode.core.modules.optimization.vbr_optimizer.get_video_duration') as mock_duration:
                 mock_duration.return_value = 3600.0
                 
                 for encoder, encoder_type in encoder_test_cases:
                     with self.subTest(encoder=encoder, type=encoder_type):
                         try:
                             # Mock the optimization process
-                            with patch('lazy_transcode.core.modules.vbr_optimizer.extract_clips_parallel') as mock_extract:
+                            with patch('lazy_transcode.core.modules.optimization.vbr_optimizer.extract_clips_parallel') as mock_extract:
                                 mock_extract.return_value = ([], None)  # No clips needed for this test
                                 
                                 result = optimize_encoder_settings_vbr(
@@ -304,16 +304,16 @@ class TestVBREncoderOptimizationRegression(unittest.TestCase):
         test_file = Path("/fake/vmaf_bounds_test.mkv")
         vmaf_targets = [85.0, 90.0, 95.0]
         
-        with patch('lazy_transcode.core.modules.media_utils.get_video_dimensions') as mock_dims:
+        with patch('lazy_transcode.core.modules.analysis.media_utils.get_video_dimensions') as mock_dims:
             mock_dims.return_value = (1920, 1080)
             
-            with patch('lazy_transcode.core.modules.vbr_optimizer.get_video_duration') as mock_duration:
+            with patch('lazy_transcode.core.modules.optimization.vbr_optimizer.get_video_duration') as mock_duration:
                 mock_duration.return_value = 3600.0
                 
                 for target_vmaf in vmaf_targets:
                     with self.subTest(vmaf=target_vmaf):
                         try:
-                            with patch('lazy_transcode.core.modules.vbr_optimizer.extract_clips_parallel') as mock_extract:
+                            with patch('lazy_transcode.core.modules.optimization.vbr_optimizer.extract_clips_parallel') as mock_extract:
                                 mock_extract.return_value = ([], None)
                                 
                                 result = optimize_encoder_settings_vbr(
@@ -344,7 +344,7 @@ class TestVBROptimizationIntegration(unittest.TestCase):
         test_file = Path("/fake/error_recovery_test.mkv")
         
         # Test that missing media info doesn't crash the system
-        with patch('lazy_transcode.core.modules.media_utils.get_video_dimensions') as mock_dims:
+        with patch('lazy_transcode.core.modules.analysis.media_utils.get_video_dimensions') as mock_dims:
             mock_dims.side_effect = Exception("Media info failed")
             
             try:

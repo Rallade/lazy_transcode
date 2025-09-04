@@ -11,8 +11,8 @@ import subprocess
 from pathlib import Path
 from unittest.mock import Mock, patch, call
 
-from lazy_transcode.core.modules.transcoding_engine import transcode_file_vbr
-from lazy_transcode.core.modules.encoder_config import EncoderConfigBuilder
+from lazy_transcode.core.modules.processing.transcoding_engine import transcode_file_vbr
+from lazy_transcode.core.modules.config.encoder_config import EncoderConfigBuilder
 
 
 class TestStreamPreservationRegression(unittest.TestCase):
@@ -29,10 +29,10 @@ class TestStreamPreservationRegression(unittest.TestCase):
         input_file = Path("test.mkv")
         output_file = Path("output.mkv")
         
-        with patch('lazy_transcode.core.modules.vbr_optimizer.build_vbr_encode_cmd') as mock_comprehensive:
+        with patch('lazy_transcode.core.modules.optimization.vbr_optimizer.build_vbr_encode_cmd') as mock_comprehensive:
             with patch('subprocess.Popen') as mock_popen:
-                with patch.object(output_file, 'exists', return_value=True):
-                    with patch.object(output_file.parent, 'mkdir'):
+                with patch('pathlib.Path.exists', return_value=True):
+                    with patch('pathlib.Path.mkdir'):
                         
                         # Mock successful process
                         mock_process = Mock()
@@ -98,8 +98,8 @@ class TestCommandGenerationIntegration(unittest.TestCase):
         with patch('subprocess.Popen') as mock_popen:
             with patch('lazy_transcode.core.modules.encoder_config.ffprobe_field') as mock_ffprobe:
                 with patch('lazy_transcode.core.modules.encoder_config.os.cpu_count', return_value=8):
-                    with patch.object(output_file, 'exists', return_value=True):
-                        with patch.object(output_file.parent, 'mkdir'):
+                    with patch('pathlib.Path.exists', return_value=True):
+                        with patch('pathlib.Path.mkdir'):
                             
                             # Mock ffprobe
                             mock_ffprobe.return_value = "yuv420p"
@@ -155,8 +155,8 @@ class TestCommandGenerationIntegration(unittest.TestCase):
                 
                 with patch('subprocess.Popen') as mock_popen:
                     with patch('lazy_transcode.core.modules.encoder_config.ffprobe_field') as mock_ffprobe:
-                        with patch.object(output_file, 'exists', return_value=True):
-                            with patch.object(output_file.parent, 'mkdir'):
+                        with patch('pathlib.Path.exists', return_value=True):
+                            with patch('pathlib.Path.mkdir'):
                                 
                                 mock_ffprobe.return_value = "yuv420p"
                                 
@@ -273,13 +273,13 @@ class TestModuleIntegrationPoints(unittest.TestCase):
         """
         # Test that the import works correctly
         try:
-            from lazy_transcode.core.modules.transcoding_engine import transcode_file_vbr
-            from lazy_transcode.core.modules.vbr_optimizer import build_vbr_encode_cmd
+            from lazy_transcode.core.modules.processing.transcoding_engine import transcode_file_vbr
+            from lazy_transcode.core.modules.optimization.vbr_optimizer import build_vbr_encode_cmd
         except ImportError as e:
             self.fail(f"Import error: {e}")
         
         # Test that transcode_file_vbr can access the comprehensive builder
-        with patch('lazy_transcode.core.modules.vbr_optimizer.build_vbr_encode_cmd') as mock_builder:
+        with patch('lazy_transcode.core.modules.optimization.vbr_optimizer.build_vbr_encode_cmd') as mock_builder:
             with patch('subprocess.Popen'):
                 with patch('builtins.print'):  # Suppress logging output
                     
@@ -302,13 +302,13 @@ class TestModuleIntegrationPoints(unittest.TestCase):
         This tests the dependency chain is intact.
         """
         try:
-            from lazy_transcode.core.modules.vbr_optimizer import build_vbr_encode_cmd
-            from lazy_transcode.core.modules.encoder_config import EncoderConfigBuilder
+            from lazy_transcode.core.modules.optimization.vbr_optimizer import build_vbr_encode_cmd
+            from lazy_transcode.core.modules.config.encoder_config import EncoderConfigBuilder
         except ImportError as e:
             self.fail(f"Dependency import failed: {e}")
         
         # Test that vbr_optimizer can create and use EncoderConfigBuilder
-        with patch('lazy_transcode.core.modules.vbr_optimizer.get_video_dimensions') as mock_dims:
+        with patch('lazy_transcode.core.modules.optimization.vbr_optimizer.get_video_dimensions') as mock_dims:
             mock_dims.return_value = (1920, 1080)
             
             try:
@@ -340,8 +340,8 @@ class TestRealWorldScenarios(unittest.TestCase):
         
         with patch('subprocess.Popen') as mock_popen:
             with patch('lazy_transcode.core.modules.encoder_config.ffprobe_field') as mock_ffprobe:
-                with patch.object(output_file, 'exists', return_value=True):
-                    with patch.object(output_file.parent, 'mkdir'):
+                with patch('pathlib.Path.exists', return_value=True):
+                    with patch('pathlib.Path.mkdir'):
                         
                         mock_ffprobe.return_value = "yuv420p"
                         
@@ -380,8 +380,8 @@ class TestRealWorldScenarios(unittest.TestCase):
         
         with patch('subprocess.Popen') as mock_popen:
             with patch('lazy_transcode.core.modules.encoder_config.ffprobe_field') as mock_ffprobe:
-                with patch.object(output_file, 'exists', return_value=True):
-                    with patch.object(output_file.parent, 'mkdir'):
+                with patch('pathlib.Path.exists', return_value=True):
+                    with patch('pathlib.Path.mkdir'):
                         
                         mock_ffprobe.return_value = "yuv420p10le"  # 10-bit content
                         
