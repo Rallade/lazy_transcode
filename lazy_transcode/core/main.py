@@ -17,14 +17,14 @@ from typing import List, Dict
 from tqdm import tqdm
 
 # Import modular components
-from .modules.encoder_config import EncoderConfigBuilder
-from .modules.vmaf_evaluator import VMAfEvaluator
-from .modules.file_manager import FileManager
-from .modules.system_utils import (
+from .modules.config.encoder_config import EncoderConfigBuilder
+from .modules.analysis.vmaf_evaluator import VMAfEvaluator
+from .modules.processing.file_manager import FileManager
+from .modules.system.system_utils import (
     TEMP_FILES, format_size, get_next_transcoded_dir, 
     start_cpu_monitor, DEBUG
 )
-from .modules.media_utils import (
+from .modules.analysis.media_utils import (
     get_duration_sec, get_video_codec, should_skip_codec, 
     compute_vmaf_score
 )
@@ -32,22 +32,22 @@ from ..utils.logging import get_logger, set_debug_mode
 
 # Module logger
 logger = get_logger("transcode_main")
-from .modules.vbr_optimizer import (
+from .modules.optimization.vbr_optimizer import (
     calculate_intelligent_vbr_bounds, optimize_encoder_settings_vbr,
     get_vbr_clip_positions, build_vbr_encode_cmd
 )
-from .modules.qp_optimizer import (
+from .modules.optimization.qp_optimizer import (
     find_optimal_qp, adaptive_qp_search_per_file, extract_random_clips,
     test_qp_on_sample
 )
-from .modules.transcoding_engine import (
+from .modules.processing.transcoding_engine import (
     build_encode_cmd, transcode_file_qp, 
     transcode_file_vbr, detect_best_encoder
 )
-from .modules.job_processor import (
+from .modules.processing.job_processor import (
     TranscodeJob, AsyncFileStager, ParallelTranscoder
 )
-from .modules.user_interface import (
+from .modules.interface.user_interface import (
     prompt_user_confirmation, verify_and_prompt_transcode,
     display_vbr_results_summary
 )
@@ -90,7 +90,7 @@ def process_vbr_mode(args, encoder: str, encoder_type: str, files: List[Path]) -
         # Run VBR optimization
         if args.vbr_method == "compare":
             # Compare all optimization methods
-            from .modules.vbr_optimizer import optimize_vbr_with_gradient_methods
+            from .modules.optimization.vbr_optimizer import optimize_vbr_with_gradient_methods
             
             logger.vbr("Running optimization method comparison")
             comparison_results = optimize_vbr_with_gradient_methods(
@@ -146,7 +146,7 @@ def process_vbr_mode(args, encoder: str, encoder_type: str, files: List[Path]) -
                 
         elif args.vbr_method in ["gradient-descent", "quasi-newton", "conjugate-gradient"]:
             # Use specific gradient method
-            from .modules.vbr_optimizer import optimize_vbr_with_gradient_methods
+            from .modules.optimization.vbr_optimizer import optimize_vbr_with_gradient_methods
             
             logger.vbr(f"Using {args.vbr_method} optimization method")
             comparison_results = optimize_vbr_with_gradient_methods(
@@ -485,7 +485,7 @@ def main():
 if __name__ == "__main__":
     import signal
     import atexit
-    from .modules.system_utils import _cleanup
+    from .modules.system.system_utils import _cleanup
     
     # Setup cleanup handlers
     atexit.register(_cleanup)
