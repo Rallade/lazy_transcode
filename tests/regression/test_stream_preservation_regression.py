@@ -31,8 +31,8 @@ class TestStreamPreservationRegression(unittest.TestCase):
         
         with patch('lazy_transcode.core.modules.vbr_optimizer.build_vbr_encode_cmd') as mock_comprehensive:
             with patch('subprocess.Popen') as mock_popen:
-                with patch.object(output_file, 'exists', return_value=True):
-                    with patch.object(output_file.parent, 'mkdir'):
+                with patch('lazy_transcode.core.modules.system_utils.file_exists', return_value=True):
+                    with patch('pathlib.Path.mkdir'):
                         
                         # Mock successful process
                         mock_process = Mock()
@@ -98,8 +98,8 @@ class TestCommandGenerationIntegration(unittest.TestCase):
         with patch('subprocess.Popen') as mock_popen:
             with patch('lazy_transcode.core.modules.encoder_config.ffprobe_field') as mock_ffprobe:
                 with patch('lazy_transcode.core.modules.encoder_config.os.cpu_count', return_value=8):
-                    with patch.object(output_file, 'exists', return_value=True):
-                        with patch.object(output_file.parent, 'mkdir'):
+                    with patch('lazy_transcode.core.modules.system_utils.file_exists', return_value=True):
+                        with patch('pathlib.Path.mkdir'):
                             
                             # Mock ffprobe
                             mock_ffprobe.return_value = "yuv420p"
@@ -155,8 +155,8 @@ class TestCommandGenerationIntegration(unittest.TestCase):
                 
                 with patch('subprocess.Popen') as mock_popen:
                     with patch('lazy_transcode.core.modules.encoder_config.ffprobe_field') as mock_ffprobe:
-                        with patch.object(output_file, 'exists', return_value=True):
-                            with patch.object(output_file.parent, 'mkdir'):
+                        with patch('lazy_transcode.core.modules.system_utils.file_exists', return_value=True):
+                            with patch('pathlib.Path.mkdir'):
                                 
                                 mock_ffprobe.return_value = "yuv420p"
                                 
@@ -340,8 +340,8 @@ class TestRealWorldScenarios(unittest.TestCase):
         
         with patch('subprocess.Popen') as mock_popen:
             with patch('lazy_transcode.core.modules.encoder_config.ffprobe_field') as mock_ffprobe:
-                with patch.object(output_file, 'exists', return_value=True):
-                    with patch.object(output_file.parent, 'mkdir'):
+                with patch('lazy_transcode.core.modules.system_utils.file_exists', return_value=True):
+                    with patch('pathlib.Path.mkdir'):
                         
                         mock_ffprobe.return_value = "yuv420p"
                         
@@ -380,8 +380,8 @@ class TestRealWorldScenarios(unittest.TestCase):
         
         with patch('subprocess.Popen') as mock_popen:
             with patch('lazy_transcode.core.modules.encoder_config.ffprobe_field') as mock_ffprobe:
-                with patch.object(output_file, 'exists', return_value=True):
-                    with patch.object(output_file.parent, 'mkdir'):
+                with patch('lazy_transcode.core.modules.system_utils.file_exists', return_value=True):
+                    with patch('pathlib.Path.mkdir'):
                         
                         mock_ffprobe.return_value = "yuv420p10le"  # 10-bit content
                         

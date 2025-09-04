@@ -612,5 +612,70 @@ class TestMetadataExtractionIntegration(unittest.TestCase):
                                              msg=f"{file_path.name} duration should be {expected['duration']}")
 
 
+class TestDurationFFprobeCommandRegression(unittest.TestCase):
+    """
+    REGRESSION TEST: Prevent duration extraction failures that block VBR optimization.
+    
+    BUG HISTORY: get_duration_sec() returned 0.0 for valid files because it used
+    incorrect ffprobe syntax, causing all files to be skipped in VBR mode.
+    """
+    
+    def setUp(self):
+        """Clear duration cache before each test."""
+        get_duration_sec.cache_clear()
+    
+    def test_duration_extraction_uses_correct_ffprobe_syntax(self):
+        """
+        CRITICAL REGRESSION TEST: Duration extraction must use proper ffprobe format query.
+        
+        Previous bug: Used stream=duration (wrong) instead of format=duration (correct).
+        This caused all files to return 0.0 duration, breaking VBR optimization.
+        """
+        test_file = Path("/fake/video.mkv")
+        
+        with patch('lazy_transcode.core.modules.media_utils.subprocess.check_output') as mock_check:
+            # Mock successful ffprobe output
+            mock_check.return_value = "1420.629"
+            
+            duration = get_duration_sec(test_file)
+            
+            # Should return the parsed duration
+            self.assertEqual(duration, 1420.629)
+            
+            # Verify correct ffprobe command was used
+            mock_check.assert_called_once()
+            called_cmd = mock_check.call_args[0][0]
+            
+            # Check that it uses format=duration (not stream=duration)
+            self.assertIn("format=duration", called_cmd)
+            self.assertIn("-show_entries", called_cmd)
+            self.assertIn("-i", called_cmd)
+            self.assertIn(str(test_file), called_cmd)
+    
+    def test_duration_zero_prevents_vbr_processing(self):
+        """
+        INTEGRATION TEST: Verify that 0.0 duration would prevent VBR processing.
+        
+        This documents the exact bug: when get_duration_sec returns 0,
+        the main program skips files with "Could not determine duration".
+        """
+        test_file = Path("/fake/video.mkv")
+        
+        with patch('lazy_transcode.core.modules.media_utils.subprocess.check_output') as mock_check:
+            # Mock ffprobe failure or invalid output
+            mock_check.return_value = ""  # Empty output
+            
+            duration = get_duration_sec(test_file)
+            
+            # Should return 0.0 for invalid output
+            self.assertEqual(duration, 0.0)
+            
+            # This 0.0 duration would cause main.py to skip the file:
+            # if duration <= 0:
+            #     logger.debug(f"SKIP {file.name}: Could not determine duration")
+            #     continue
+            self.assertLessEqual(duration, 0, "Zero duration should trigger skip logic")
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

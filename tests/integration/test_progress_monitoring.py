@@ -43,7 +43,7 @@ speed=1.2x
 progress=continue"""
         
         with patch('builtins.open', mock_open(read_data=progress_content)):
-            with patch.object(self.progress_file, 'exists', return_value=True):
+            with patch('pathlib.Path.exists', return_value=True):
                 monitor_progress(self.process, self.progress_file, self.callback)
         
         # Verify callback was called with progress data
@@ -78,7 +78,7 @@ speed=1.0x
 progress=continue"""
         
         with patch('builtins.open', mock_open(read_data=progress_content)):
-            with patch.object(self.progress_file, 'exists', return_value=True):
+            with patch('pathlib.Path.exists', return_value=True):
                 monitor_progress(self.process, self.progress_file, self.callback)
         
         # Check that time was converted correctly (01:30:45)
@@ -93,7 +93,7 @@ progress=continue"""
         self.process.poll.side_effect = [None, None, 0]  # Takes a few iterations
         
         # Progress file doesn't exist
-        with patch.object(self.progress_file, 'exists', return_value=False):
+        with patch('pathlib.Path.exists', return_value=False):
             monitor_progress(self.process, self.progress_file, self.callback)
         
         # Should not crash and should still call final callback
@@ -109,7 +109,7 @@ progress=continue"""
         
         # Mock file operations that raise exceptions
         with patch('builtins.open', side_effect=PermissionError("Access denied")):
-            with patch.object(self.progress_file, 'exists', return_value=True):
+            with patch('pathlib.Path.exists', return_value=True):
                 monitor_progress(self.process, self.progress_file, self.callback)
         
         # Should not crash due to file read error
@@ -129,7 +129,7 @@ frame=abc
 progress=continue"""
         
         with patch('builtins.open', mock_open(read_data=malformed_content)):
-            with patch.object(self.progress_file, 'exists', return_value=True):
+            with patch('pathlib.Path.exists', return_value=True):
                 monitor_progress(self.process, self.progress_file, self.callback)
         
         # Should not crash and should still process valid lines
@@ -137,6 +137,7 @@ progress=continue"""
         
         # Check that it processed the valid progress line
         call_args = self.callback.call_args_list[0][0][0]
+        # First callback should still reflect 'continue'
         self.assertEqual(call_args['progress'], 'continue')
     
     @patch('time.sleep')
@@ -148,7 +149,7 @@ progress=continue"""
         progress_content = "progress=continue"
         
         with patch('builtins.open', mock_open(read_data=progress_content)):
-            with patch.object(self.progress_file, 'exists', return_value=True):
+            with patch('pathlib.Path.exists', return_value=True):
                 monitor_progress(self.process, self.progress_file, self.callback)
         
         # Check that completion message was logged
@@ -164,7 +165,7 @@ progress=continue"""
         progress_content = "progress=continue"
         
         with patch('builtins.open', mock_open(read_data=progress_content)):
-            with patch.object(self.progress_file, 'exists', return_value=True):
+            with patch('pathlib.Path.exists', return_value=True):
                 monitor_progress(self.process, self.progress_file, self.callback)
         
         # Check final callback was made with 'end' status
@@ -179,7 +180,7 @@ progress=continue"""
         self.process.poll.side_effect = [None, 0]
         
         with patch('builtins.open', mock_open(read_data="progress=continue")):
-            with patch.object(self.progress_file, 'exists', return_value=True):
+            with patch('pathlib.Path.exists', return_value=True):
                 monitor_progress(self.process, self.progress_file, self.callback)
         
         # Verify sleep was called with 1.0 second intervals
@@ -201,7 +202,7 @@ speed=N/A
 progress=continue"""
         
         with patch('builtins.open', mock_open(read_data=progress_content)):
-            with patch.object(self.progress_file, 'exists', return_value=True):
+            with patch('pathlib.Path.exists', return_value=True):
                 monitor_progress(self.process, self.progress_file, self.callback)
         
         # Should handle zero values gracefully
@@ -234,7 +235,7 @@ progress=continue"""
             return mock_open(read_data=content)(*args, **kwargs)
         
         with patch('builtins.open', side_effect=mock_open_multiple):
-            with patch.object(self.progress_file, 'exists', return_value=True):
+            with patch('pathlib.Path.exists', return_value=True):
                 monitor_progress(self.process, self.progress_file, self.callback)
         
         # Should have multiple progress updates plus final end
@@ -271,7 +272,7 @@ speed=1.2x
 progress=continue"""
         
         with patch('builtins.open', mock_open(read_data=progress_content)):
-            with patch.object(self.progress_file, 'exists', return_value=True):
+            with patch('pathlib.Path.exists', return_value=True):
                 monitor_progress(self.process, self.progress_file, self.callback)
         
         # Verify all fields were parsed and passed to callback

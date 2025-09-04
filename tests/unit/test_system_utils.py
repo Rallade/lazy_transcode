@@ -12,8 +12,8 @@ from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 
 from lazy_transcode.core.modules.system_utils import (
-    format_size, get_next_transcoded_dir, 
-    DEBUG, TEMP_FILES
+    format_size, get_next_transcoded_dir,
+    DEBUG, TEMP_FILES, cleanup_temp_files
 )
 
 
@@ -139,6 +139,14 @@ class TestSystemUtils(unittest.TestCase):
 
 class TestSystemUtilsEdgeCases(unittest.TestCase):
     """Test edge cases in system utilities."""
+    def setUp(self):
+        import tempfile, shutil
+        self.test_dir = Path(tempfile.mkdtemp())
+        self._shutil = shutil
+
+    def tearDown(self):
+        if hasattr(self, 'test_dir') and self.test_dir.exists():
+            self._shutil.rmtree(self.test_dir, ignore_errors=True)
     
     def test_format_size_very_large(self):
         """Test size formatting for very large values."""

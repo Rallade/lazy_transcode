@@ -74,6 +74,24 @@ class TestMediaUtils(unittest.TestCase):
         self.assertEqual(result, 0.0)
     
     @patch('subprocess.check_output')
+    def test_get_duration_sec_invalid_output(self, mock_check_output):
+        """Test duration extraction with invalid/empty output."""
+        # Test empty output
+        mock_check_output.return_value = ""
+        result = get_duration_sec(self.test_file)
+        self.assertEqual(result, 0.0)
+        
+        # Test N/A output (common with corrupted files)
+        mock_check_output.return_value = "N/A"
+        result = get_duration_sec(self.test_file)
+        self.assertEqual(result, 0.0)
+        
+        # Test invalid numeric output
+        mock_check_output.return_value = "invalid_number"
+        result = get_duration_sec(self.test_file)
+        self.assertEqual(result, 0.0)
+    
+    @patch('subprocess.check_output')
     def test_get_video_codec_h264(self, mock_check_output):
         """Test video codec detection for H.264."""
         mock_check_output.return_value = "h264\n"

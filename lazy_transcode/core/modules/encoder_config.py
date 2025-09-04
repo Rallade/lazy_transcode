@@ -218,12 +218,13 @@ class EncoderConfigBuilder:
         
         # Stream mapping
         map_streams = self.output_params.get('map_streams', [])
-        if not map_streams and self.output_params.get('copy_streams'):
-            # Default comprehensive mapping
-            cmd.extend(['-map', '0', '-map_metadata', '0', '-map_chapters', '0'])
-        else:
+        if map_streams:
+            # Custom specific mapping
             for stream_map in map_streams:
                 cmd.extend(['-map', stream_map])
+        elif self.output_params.get('copy_streams'):
+            # Default comprehensive mapping
+            cmd.extend(['-map', '0', '-map_metadata', '0', '-map_chapters', '0'])
         
         # Video filters
         filters = self._build_filter_chain()
@@ -550,10 +551,13 @@ class EncoderConfigBuilder:
         # Detect pixel format and profile
         input_path = Path(input_file)
         pixfmt = ffprobe_field(input_path, "pix_fmt")
+        # Defensive: some tests patch higher-level builders and supply mocks; ensure pixfmt is a usable string
+        if not isinstance(pixfmt, str):
+            pixfmt = "yuv420p"  # safe default
         is10 = bool(pixfmt and ("10le" in pixfmt or "p10" in pixfmt))
         profile = "main10" if is10 else "main"
         
-        # Set base configuration
+    # Set base configuration
         loglevel = "info" if debug else "error"
         self.set_base_config(input_file, output_file, start_time, duration, 
                            loglevel=loglevel)

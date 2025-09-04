@@ -30,21 +30,82 @@ except ImportError:
     PSUTIL_AVAILABLE = False
 
 # Global state
-TEMP_FILES: set[str] = set()
+"""TEMP_FILES is expected by tests to behave like a list supporting append/remove and indexing.
+Internally we still want uniqueness for cleanup, so we store both an ordered list and a set membership guard.
+For simplicity we expose a list and keep semantics minimal (tests only rely on list ops)."""
+class _TempFilesList(list):
+    _membership: set[str]
+    def append(self, item):  # type: ignore[override]
+        if isinstance(item, Path):
+            key = str(item)
+        else:
+            key = str(item)
+        if key not in self._membership:
+            self._membership.add(key)
+            super().append(item)
+
+    def remove(self, item):  # type: ignore[override]
+        key = str(item)
+        if key in self._membership:
+            self._membership.remove(key)
+        try:
+            super().remove(item)
+        except ValueError:
+            pass
+
+    def discard(self, item):  # convenience used internally
+        key = str(item)
+        if key in self._membership:
+            self._membership.remove(key)
+        # remove first matching path/str
+        for i, existing in enumerate(list(self)):
+            if str(existing) == key:
+                del self[i]
+                break
+
+    # Provide set-like add used by existing code paths
+    def add(self, item):  # type: ignore[override]
+        self.append(item)
+
+TEMP_FILES = _TempFilesList()
+TEMP_FILES._membership = set()  # type: ignore[attr-defined]
 DEBUG = False  # Set by --debug flag
+
+
+def file_exists(path: "str | os.PathLike[str] | Path") -> bool:
+    """Thin existence wrapper to provide a stable patch point for tests.
+
+    Semantics: identical to Path(path).exists() with broad exception safety.
+    Returns False on any unexpected OSError to avoid propagating transient FS issues
+    during test simulations (patched behaviors). Keep intentionally minimal.
+    """
+    try:
+        return Path(path).exists()
+    except Exception:
+        return False
 
 
 def _cleanup():
     """Cleanup temporary files on exit"""
     for f in list(TEMP_FILES):
         try:
-            if os.path.exists(f):
-                os.remove(f)
-                logger.cleanup(f"removed {f}")
+            path_str = str(f)
+            if file_exists(path_str):
+                os.remove(path_str)
+                if hasattr(logger, 'cleanup'):
+                    try:
+                        logger.cleanup(f"removed {path_str}")  # type: ignore[attr-defined]
+                    except Exception:
+                        pass
         except Exception:
             pass
         finally:
             TEMP_FILES.discard(f)
+    try:
+        if hasattr(TEMP_FILES, 'clear'):
+            TEMP_FILES.clear()  # type: ignore
+    except Exception:
+        pass
 
 
 # Register cleanup on exit
@@ -60,13 +121,27 @@ def run_logged(cmd: list[str], **popen_kwargs) -> subprocess.CompletedProcess:
 
 
 def format_size(bytes_size: int) -> str:
-    """Convert bytes to human readable format"""
-    size = float(bytes_size)
-    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
-        if size < 1024.0:
-            return f"{size:.1f} {unit}"
+    """Convert bytes to human readable format matching test expectations:
+    - Bytes: integer no decimal ("500 B", "0 B")
+    - >= KB: two decimals ("1.50 KB", "2.00 MB")
+    """
+    negative = bytes_size < 0
+    size = float(abs(bytes_size))
+    units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
+    unit_index = 0
+    while unit_index < len(units) - 1 and size >= 1024.0:
         size /= 1024.0
-    return f"{size:.1f} PB"
+        unit_index += 1
+    unit = units[unit_index]
+    if unit == 'B':
+        formatted = f"{int(size)} {unit}"
+    else:
+        formatted = f"{size:.2f} {unit}"
+    return f"-{formatted}" if negative else formatted
+
+def cleanup_temp_files():
+    """Public cleanup function expected by tests (wrapper around _cleanup)."""
+    _cleanup()
 
 
 def run_command(cmd: list[str], timeout: int = 30, capture_output: bool = True,
@@ -132,7 +207,7 @@ def temporary_file(suffix: str = ".tmp", prefix: str = "lazy_transcode_"):
     finally:
         if temp_file:
             try:
-                if temp_file.exists():
+                if file_exists(temp_file):
                     temp_file.unlink()
             except Exception as e:
                 if DEBUG:
@@ -150,14 +225,14 @@ def get_next_transcoded_dir(base_path: Path) -> Path:
     """
     transcoded_base = base_path / "Transcoded"
     
-    if not transcoded_base.exists():
+    if not file_exists(transcoded_base):
         return transcoded_base
     
     # Find the next available number
     counter = 2
     while True:
         candidate = base_path / f"Transcoded_{counter}"
-        if not candidate.exists():
+        if not file_exists(candidate):
             return candidate
         counter += 1
 

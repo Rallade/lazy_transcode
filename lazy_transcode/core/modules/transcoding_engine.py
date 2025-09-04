@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from .system_utils import DEBUG, get_next_transcoded_dir, run_command
+from .vbr_optimizer import build_vbr_encode_cmd  # canonical import now; tests should patch here
 
 
 def _log_input_streams(input_file: Path):
@@ -64,6 +65,9 @@ def _log_input_streams(input_file: Path):
                 print(f"[TRANSCODE-VBR]     [{i}] {codec} ({language})")
                 
             print(f"[TRANSCODE-VBR]   Chapters: {len(chapters)}")
+        else:
+            # Non-zero return code without raising an exception – emit warning so tests and users see failure
+            print(f"[TRANSCODE-VBR] Warning: Could not analyze input streams (ffprobe return code {result.returncode})")
             
     except Exception as e:
         print(f"[TRANSCODE-VBR] Warning: Could not analyze input streams: {e}")
@@ -306,12 +310,11 @@ def transcode_file_vbr(input_file: Path, output_file: Path, encoder: str, encode
         # Analyze input streams before transcoding
         _log_input_streams(input_file)
         
-        # Import the comprehensive VBR encoder from vbr_optimizer
-        from .vbr_optimizer import build_vbr_encode_cmd
-        
-        # Build command using the comprehensive encoder (not the local one)
-        cmd = build_vbr_encode_cmd(input_file, output_file, encoder, encoder_type,
-                                  max_bitrate, avg_bitrate, preserve_hdr_metadata=preserve_hdr_metadata)
+        # Build command using the module-level wrapper so tests can patch it
+        cmd = build_vbr_encode_cmd(
+            input_file, output_file, encoder, encoder_type,
+            max_bitrate, avg_bitrate, preserve_hdr_metadata=preserve_hdr_metadata
+        )
         
         # Add progress tracking if needed
         if progress_callback and progress_file:
@@ -403,19 +406,23 @@ def monitor_progress(process: subprocess.Popen, progress_file: Path, callback):
                         print(f"[TRANSCODE-VBR] Progress: Frame {frame}, FPS {fps}, "
                               f"Time {time_str}, Speed {speed}, Bitrate {bitrate}")
                 
-                # Call progress callback with current state
+                # Call progress callback with current state (use copy so later mutations don't affect earlier callbacks)
                 if 'progress' in last_progress:
-                    callback(last_progress)
+                    callback(dict(last_progress))
                     
             except (FileNotFoundError, PermissionError):
                 pass
                 
         time.sleep(1.0)  # Check every second for better progress visibility
         
-    # Final progress update
-    if last_progress and callback:
-        last_progress['progress'] = 'end'
-        callback(last_progress)
+    # Final progress update (always emit an 'end' status once process finishes)
+    if callback:
+        if not last_progress or 'progress' not in last_progress:
+            final_progress = {'progress': 'end'}
+        else:
+            final_progress = dict(last_progress)
+            final_progress['progress'] = 'end'
+        callback(final_progress)
         print(f"[TRANSCODE-VBR] Encoding completed!")
 
 

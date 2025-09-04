@@ -75,8 +75,8 @@ class TestEncoderConfigBuilderStreamPreservation(unittest.TestCase):
         # Should use custom mapping
         self.assertIn('-map 0:v:0', cmd_str)
         self.assertIn('-map 0:a:0', cmd_str)
-        # Should not include default comprehensive mapping
-        self.assertNotIn('-map 0', cmd_str)
+        # Should not include default comprehensive mapping (check for '-map 0 ' with space)
+        self.assertNotIn('-map 0 ', cmd_str)
     
     def test_hardware_encoder_stream_preservation(self):
         """Test stream preservation with hardware encoders."""
