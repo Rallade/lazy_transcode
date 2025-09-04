@@ -103,3 +103,9 @@ PACKAGE_MIGRATION_SUMMARY.md  # Internal documentation
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Temporary debug scripts (development only)
+debug_*.py
+
+# Copilot instructions (local only - do not commit to remote)
+.github/
