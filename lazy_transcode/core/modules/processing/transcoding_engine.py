@@ -449,8 +449,22 @@ def get_encoder_list() -> List[str]:
         return []
 
 
-def detect_best_encoder() -> tuple[str, str]:
+def detect_best_encoder(force_cpu: bool = False) -> tuple[str, str]:
     """Detect the best available encoder and its type."""
+    
+    if force_cpu:
+        # Force software encoding only
+        available_encoders = get_encoder_list()
+        software_preferences = [
+            ("libx265", "software"),
+            ("libx264", "software")
+        ]
+        for encoder, encoder_type in software_preferences:
+            if encoder in available_encoders:
+                return encoder, encoder_type
+        # Fallback to libx265 even if not detected
+        return "libx265", "software"
+    
     available_encoders = get_encoder_list()
     
     # Priority order: AMD -> NVIDIA -> Intel -> Software (matches media_utils.py)
