@@ -53,16 +53,15 @@ class TestVBRBounds(unittest.TestCase):
         self.assertGreater(min_rate, 1000)  # Reasonable minimum
         self.assertLess(max_rate, 30000)   # Reasonable maximum
     
+    @patch('lazy_transcode.core.modules.optimization.vbr_optimizer.get_video_dimensions')
     @patch('lazy_transcode.core.modules.optimization.vbr_optimizer.ffprobe_field')
     @patch('lazy_transcode.core.modules.optimization.vbr_optimizer.get_duration_sec')
-    def test_get_intelligent_bounds_4k(self, mock_duration, mock_ffprobe):
+    def test_get_intelligent_bounds_4k(self, mock_duration, mock_ffprobe, mock_dimensions):
         """Test intelligent bounds calculation for 4K."""
         # Mock 4K properties
         mock_duration.return_value = 3600.0
-        mock_ffprobe.side_effect = lambda path, field: {
-            'width': '3840',
-            'height': '2160'
-        }.get(field, 'unknown')
+        mock_dimensions.return_value = (3840, 2160)
+        mock_ffprobe.return_value = "24"
         
         min_rate, max_rate = get_intelligent_bounds(
             self.input_file, target_vmaf=92.0, preset="medium",
