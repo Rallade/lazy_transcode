@@ -547,40 +547,82 @@ def get_intelligent_bounds(infile: Path, target_vmaf: float, preset: str,
     hw_efficiency = 0.85 if encoder_type == "hardware" else 1.0
     
     # Preset-specific bounds calculation with encoder type optimization
+    # GENERALIZABLE FIX: Use resolution-based bounds instead of source-bitrate-based
+    # This prevents the algorithm from failing on high-bitrate sources by using
+    # fundamentally reasonable bounds based on actual encoding requirements
+    
+    # Get video resolution for resolution-based bounds calculation
+    try:
+        width, height = get_video_dimensions(infile)
+        pixel_count = width * height
+    except:
+        # Fallback to common 1080p if detection fails
+        width, height = 1920, 1080
+        pixel_count = width * height
+    
+    # Resolution-based bounds (generalizable to any content type)
+    # These are based on practical encoding limits, not source bitrate
+    if pixel_count >= 3840 * 2160:  # 4K
+        resolution_min_base = 3000
+        resolution_max_base = 15000
+    elif pixel_count >= 1920 * 1080:  # 1080p
+        resolution_min_base = 1000
+        resolution_max_base = 8000
+    elif pixel_count >= 1280 * 720:  # 720p
+        resolution_min_base = 500
+        resolution_max_base = 4000
+    else:  # Lower resolutions
+        resolution_min_base = 300
+        resolution_max_base = 2000
+    
+    # Apply preset and quality adjustments to resolution-based bounds
     if preset == "fast":
-        # Fast preset bounds - FIXED: Use overlapping ranges so higher VMAF targets can find low bitrates
+        preset_multiplier = 1.3  # Fast needs higher bitrates
         if target_vmaf >= 95:
-            base_min = max(int(source_bitrate_kbps * 0.20 * hw_efficiency), 800)  # Allow low exploration
-            base_max = int(source_bitrate_kbps * 0.75 * hw_efficiency)
+            quality_min_factor = 1.5
+            quality_max_factor = 2.0
         elif target_vmaf >= 90:
-            base_min = max(int(source_bitrate_kbps * 0.20 * hw_efficiency), 800)  # Same as VMAF 85
-            base_max = int(source_bitrate_kbps * 0.55 * hw_efficiency)
+            quality_min_factor = 1.2
+            quality_max_factor = 1.6
         else:
-            base_min = max(int(source_bitrate_kbps * 0.20 * hw_efficiency), 800)
-            base_max = int(source_bitrate_kbps * 0.45 * hw_efficiency)
+            quality_min_factor = 1.0
+            quality_max_factor = 1.3
     elif preset == "medium":
-        # Medium preset bounds - FIXED: Use overlapping ranges so higher VMAF targets can find low bitrates
+        preset_multiplier = 1.0  # Baseline
         if target_vmaf >= 95:
-            # Allow exploration down to efficient encoding ranges
-            base_min = max(int(source_bitrate_kbps * 0.15 * hw_efficiency), 800)  # Same low bound as VMAF 85
-            base_max = int(source_bitrate_kbps * 0.65 * hw_efficiency)
+            quality_min_factor = 1.3
+            quality_max_factor = 1.8
         elif target_vmaf >= 90:
-            base_min = max(int(source_bitrate_kbps * 0.15 * hw_efficiency), 800)  # Same low bound as VMAF 85
-            base_max = int(source_bitrate_kbps * 0.50 * hw_efficiency)
+            quality_min_factor = 1.0
+            quality_max_factor = 1.4
         else:
-            base_min = max(int(source_bitrate_kbps * 0.15 * hw_efficiency), 600)
-            base_max = int(source_bitrate_kbps * 0.40 * hw_efficiency)
+            quality_min_factor = 0.8
+            quality_max_factor = 1.1
     else:  # slow preset
-        # Slow preset bounds - FIXED: Use overlapping ranges so higher VMAF targets can find low bitrates
+        preset_multiplier = 0.8  # Slow is more efficient
         if target_vmaf >= 95:
-            base_min = max(int(source_bitrate_kbps * 0.15 * hw_efficiency), 600)  # Allow very low exploration
-            base_max = int(source_bitrate_kbps * 0.60 * hw_efficiency)
+            quality_min_factor = 1.2
+            quality_max_factor = 1.6
         elif target_vmaf >= 90:
-            base_min = max(int(source_bitrate_kbps * 0.15 * hw_efficiency), 600)  # Same as VMAF 85
-            base_max = int(source_bitrate_kbps * 0.45 * hw_efficiency)
+            quality_min_factor = 0.9
+            quality_max_factor = 1.3
         else:
-            base_min = max(int(source_bitrate_kbps * 0.15 * hw_efficiency), 500)
-            base_max = int(source_bitrate_kbps * 0.35 * hw_efficiency)
+            quality_min_factor = 0.7
+            quality_max_factor = 1.0
+    
+    # Calculate final bounds using resolution-based approach
+    base_min = int(resolution_min_base * preset_multiplier * quality_min_factor * hw_efficiency)
+    base_max = int(resolution_max_base * preset_multiplier * quality_max_factor * hw_efficiency)
+    
+    # Sanity check against source bitrate to prevent unreasonable maximums
+    # (but don't let source bitrate set minimums too high)
+    reasonable_max = min(base_max, int(source_bitrate_kbps * 0.8))
+    if reasonable_max < base_min:
+        # If source is very low bitrate, use resolution-based bounds as-is
+        reasonable_max = base_max
+    
+    base_min = max(base_min, 500)  # Absolute minimum for any encoding
+    base_max = reasonable_max
     
     # Apply adaptive lower bound expansion based on previous results
     if trial_results:

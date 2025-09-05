@@ -9,8 +9,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 def main_transcode():
     """Entry point for lazy-transcode command."""
-    from lazy_transcode.core.main import main
-    main()
+    from lazy_transcode.cli_enhanced import main_enhanced
+    main_enhanced()
 
 def main_manager():
     """Entry point for lazy-transcode-manager command."""
