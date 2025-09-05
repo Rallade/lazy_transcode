@@ -300,7 +300,13 @@ class FileManager:
             "*.qp*_sample.*",
             "*_qp*_sample.*",
             "vbr_ref_clip_*",
-            "vbr_enc_clip_*"
+            "vbr_enc_clip_*",
+            "*.vbr_clip_*",
+            "*_vbr_clip_*",
+            "*.vbr_test_*",
+            "*_vbr_test_*",
+            "*.clip*_*.sample.*",
+            "*_vbr_state.json"
         ]
         
         removed = 0

@@ -34,7 +34,10 @@ from ..utils.logging import get_logger, set_debug_mode
 logger = get_logger("transcode_main")
 from .modules.optimization.vbr_optimizer import (
     calculate_intelligent_vbr_bounds, optimize_encoder_settings_vbr,
-    get_vbr_clip_positions, build_vbr_encode_cmd
+    build_vbr_encode_cmd
+)
+from .modules.optimization.coverage_clips import (
+    get_coverage_based_vbr_clip_positions
 )
 from .modules.optimization.qp_optimizer import (
     find_optimal_qp, adaptive_qp_search_per_file, extract_random_clips,
@@ -70,22 +73,17 @@ def process_vbr_mode(args, encoder: str, encoder_type: str, files: List[Path]) -
             logger.debug(f"SKIP {file.name}: Already HEVC/AV1")
             continue
         
-        # Get duration and calculate clips
+        # Get duration and calculate clips using coverage-based algorithm
         duration = get_duration_sec(file)
         if duration <= 0:
             logger.debug(f"SKIP {file.name}: Could not determine duration")
             continue
             
-        # Auto-scale clips based on video length
-        vbr_clips = args.vbr_clips
-        if duration > 0:
-            # Auto-scale clips: 1 clip per 30 minutes, min 2, max 6
-            auto_clips = max(2, min(6, int(duration / 1800)))  # 1800s = 30min
-            if auto_clips != vbr_clips:
-                logger.debug(f"Auto-scaling clips from {vbr_clips} to {auto_clips} based on {duration/60:.1f}min duration")
-                vbr_clips = auto_clips
-                
-        clip_positions = get_vbr_clip_positions(duration, vbr_clips)
+        # Use new coverage-based clip selection (automatically scales clips for 10% coverage)
+        logger.debug(f"Using coverage-based clip selection for {duration/60:.1f}min video")
+        clip_positions = get_coverage_based_vbr_clip_positions(
+            file, duration, clip_duration=30, target_coverage=0.10
+        )
         
         # Run VBR optimization
         if args.vbr_method == "compare":
@@ -284,11 +282,12 @@ def main():
     
     # Mode selection
     mode_group = parser.add_mutually_exclusive_group()
-    mode_group.add_argument("--vbr", action="store_true", help="Use VBR optimization mode")
+    mode_group.add_argument("--vbr", action="store_true", default=True,
+                          help="Use VBR optimization mode (default)")
     mode_group.add_argument("--qp", type=int, default=0, metavar="QP", 
                           help="Use QP mode (0 = auto-find optimal QP)")
-    mode_group.add_argument("--auto", action="store_true", default=True,
-                          help="Auto-select VBR or QP based on file characteristics (default)")
+    mode_group.add_argument("--auto", action="store_true",
+                          help="Auto-select VBR or QP based on file characteristics")
     
     # Quality settings
     parser.add_argument("--vmaf-target", type=float, default=95, 
@@ -404,15 +403,15 @@ def main():
     vbr_results = {}
     qp_map = {}
     
-    if args.vbr:
-        print(f"\n[MODE] VBR Optimization")
-        vbr_results = process_vbr_mode(args, encoder, encoder_type, files)
-    elif args.qp > 0:
+    if args.qp > 0:
         print(f"\n[MODE] QP Fixed ({args.qp})")
         qp_map = process_qp_mode(args, encoder, encoder_type, files)
-    else:
+    elif args.auto:
         print(f"\n[MODE] Auto (VBR + QP)")
         vbr_results, qp_map = process_auto_mode(args, encoder, encoder_type, files)
+    else:
+        print(f"\n[MODE] VBR Optimization")
+        vbr_results = process_vbr_mode(args, encoder, encoder_type, files)
     
     # Verification step
     if args.verify and (vbr_results or qp_map):
