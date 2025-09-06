@@ -45,9 +45,10 @@ class CodecCheckResult:
 class FileManager:
     """Centralized file processing workflows and temporary file management."""
     
-    def __init__(self, debug: bool = False, temp_files: Optional[Set[str]] = None):
+    def __init__(self, debug: bool = False, temp_files: Optional[Set[str]] = None, include_h265: bool = False):
         self.debug = debug
         self.temp_files = temp_files or set()
+        self.include_h265 = include_h265
         
     def discover_video_files(self, base_path: Path, extensions: str = "mkv,mp4,mov,ts") -> FileDiscoveryResult:
         """
@@ -66,20 +67,31 @@ class FileManager:
         # Build extension patterns
         patterns = [f"*.{ext.strip().lower()}" for ext in extensions.split(",") if ext.strip()]
         
+        if self.debug:
+            logger.debug(f"Searching directory: {base_path}")
+            logger.debug(f"Patterns: {patterns}")
+
         # Discover files
         files: List[Path] = []
         for pattern in patterns:
-            files.extend(base_path.rglob(pattern))
+            discovered = list(base_path.rglob(pattern))
+            files.extend(discovered)
+            if self.debug:
+                logger.debug(f"Discovered {len(discovered)} files for pattern {pattern}")
+
         files = sorted(set(files))
         total_found = len(files)
-        
+
         if self.debug:
-            logger.debug(f"Found {total_found} files with patterns {patterns}")
-        
+            logger.debug(f"Total files discovered: {total_found}")
+
         # Filter hidden files and macOS resource forks
         pre_hidden_count = len(files)
         files = [f for f in files if not f.name.startswith('._') and not f.name.startswith('.')]
         hidden_skipped = pre_hidden_count - len(files)
+
+        if self.debug:
+            logger.debug(f"Hidden files skipped: {hidden_skipped}")
         
         # Filter sample clips and encoding artifacts
         files = [f for f in files if not self._is_sample_or_artifact(f)]
@@ -130,16 +142,19 @@ class FileManager:
         
         for file_path in files:
             codec_result = self.check_video_codec(file_path)
-            
+
+            if self.debug:
+                logger.debug(f"Processing file: {file_path.name}, Codec: {codec_result.codec}, Should Skip: {codec_result.should_skip}, Reason: {codec_result.reason}")
+
+            # Use the should_skip flag from codec detection
             if codec_result.should_skip:
                 skipped_files.append((file_path, codec_result.reason))
                 if self.debug:
-                    print(f"  SKIP: {file_path.name} ({codec_result.reason})")
+                    logger.debug(f"  SKIP: {file_path.name} ({codec_result.reason})")
             else:
                 files_to_transcode.append(file_path)
-                codec_name = codec_result.codec or 'unknown'
                 if self.debug:
-                    print(f"  QUEUE: {file_path.name} ({codec_name})")
+                    logger.debug(f"  QUEUE: {file_path.name} ({codec_result.codec or 'unknown'})")
         
         return files_to_transcode, skipped_files
     
@@ -189,13 +204,19 @@ class FileManager:
             )
     
     def _should_skip_codec(self, codec: Optional[str]) -> bool:
-        """Check if a codec should be skipped (already efficient)."""
+        """Check if a codec should be skipped (already efficient), unless include_h265 is set."""
         if not codec:
             return False
-        
-        # Skip if already using efficient codecs
+
+        codec = codec.lower()
+
+        # If include_h265 is True, do not skip h265/hevc
+        if self.include_h265 and codec in {"hevc", "h265"}:
+            return False
+
+        # Skip if already using efficient codecs (AV1, HEVC/H.265)
         efficient_codecs = {"hevc", "h265", "av1"}
-        return codec.lower() in efficient_codecs
+        return codec in efficient_codecs
     
     def process_files_with_codec_filtering(self, base_path: Path, extensions: str = "mkv,mp4,mov,ts") -> FileDiscoveryResult:
         """

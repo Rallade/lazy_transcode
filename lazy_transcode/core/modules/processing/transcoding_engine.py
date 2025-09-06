@@ -288,7 +288,7 @@ def transcode_file_qp(input_file: Path, output_file: Path, encoder: str, encoder
 
 def transcode_file_vbr(input_file: Path, output_file: Path, encoder: str, encoder_type: str,
                       max_bitrate: int, avg_bitrate: int, preserve_hdr_metadata: bool = True,
-                      progress_callback=None) -> bool:
+                      progress_callback=None, auto_tune: bool = False) -> bool:
     """Transcode a file with VBR encoding and comprehensive logging."""
     # Set up progress tracking
     progress_file = None
@@ -314,7 +314,8 @@ def transcode_file_vbr(input_file: Path, output_file: Path, encoder: str, encode
         # Build command using the module-level wrapper so tests can patch it
         cmd = build_vbr_encode_cmd(
             input_file, output_file, encoder, encoder_type,
-            max_bitrate, avg_bitrate, preserve_hdr_metadata=preserve_hdr_metadata
+            max_bitrate, avg_bitrate, preserve_hdr_metadata=preserve_hdr_metadata,
+            auto_tune=auto_tune
         )
         
         # Add progress tracking if needed

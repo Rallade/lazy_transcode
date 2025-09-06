@@ -138,8 +138,15 @@ class ContentAnalyzer:
             '-ss', str(start_time),
             '-i', str(source),
             '-t', str(duration),
+            '-map', '0',  # CRITICAL: Preserve all streams
+            '-map_metadata', '0',
+            '-map_chapters', '0',
             '-c:v', 'libx264', '-crf', '23', '-preset', 'fast',
             '-c:a', 'copy',
+            '-c:s', 'copy',
+            '-c:d', 'copy',
+            '-c:t', 'copy',
+            '-copy_unknown',
             '-avoid_negative_ts', 'make_zero',
             str(output)
         ]

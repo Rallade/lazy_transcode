@@ -107,7 +107,7 @@ class EncoderConfigBuilder:
     def set_encoder(self, encoder: str, preset: Optional[str] = None, crf: Optional[int] = None, 
                    bitrate: Optional[int] = None, profile: Optional[str] = None,
                    rate_control: Optional[str] = None, maxrate: Optional[int] = None,
-                   bufsize: Optional[int] = None) -> 'EncoderConfigBuilder':
+                   bufsize: Optional[int] = None, tune: Optional[str] = None) -> 'EncoderConfigBuilder':
         """Set encoder and basic quality parameters."""
         self.encoder_params = {
             'encoder': encoder,
@@ -117,7 +117,8 @@ class EncoderConfigBuilder:
             'profile': profile,
             'rate_control': rate_control,
             'maxrate': maxrate,
-            'bufsize': bufsize
+            'bufsize': bufsize,
+            'tune': tune
         }
         return self
     
@@ -289,6 +290,10 @@ class EncoderConfigBuilder:
         # Preset (skip for AMF encoder as it doesn't support presets)
         if self.encoder_params.get('preset') and 'amf' not in encoder:
             params.extend(['-preset', self.encoder_params['preset']])
+        
+        # Tune (only supported by libx264 and libx265, not hardware encoders)
+        if self.encoder_params.get('tune') and ('libx264' in encoder or 'libx265' in encoder):
+            params.extend(['-tune', self.encoder_params['tune']])
         
         # Profile
         if self.encoder_params.get('profile'):
@@ -533,7 +538,8 @@ class EncoderConfigBuilder:
                                  encoder: str, preset: str, crf: int,
                                  width: int, height: int, threads: Optional[int] = None,
                                  start_time: Optional[float] = None, duration: Optional[float] = None,
-                                 preserve_hdr: bool = True, debug: bool = False) -> List[str]:
+                                 preserve_hdr: bool = True, debug: bool = False, 
+                                 tune: Optional[str] = None) -> List[str]:
         """Build standard encoding command (replaces build_encode_cmd)."""
         self.reset()
         
@@ -553,18 +559,18 @@ class EncoderConfigBuilder:
         
         # Set encoder with QP mapping for hardware encoders
         if 'nvenc' in encoder:
-            self.set_encoder(encoder, preset, crf, rate_control='constqp', profile=profile)
+            self.set_encoder(encoder, preset, crf, rate_control='constqp', profile=profile, tune=tune)
         elif 'qsv' in encoder:
-            self.set_encoder(encoder, preset, crf, profile=profile)
+            self.set_encoder(encoder, preset, crf, profile=profile, tune=tune)
         elif 'amf' in encoder:
-            self.set_encoder(encoder, rate_control='cqp', profile=profile)
+            self.set_encoder(encoder, rate_control='cqp', profile=profile, tune=tune)
             # AMF uses separate QP values
             self.encoder_params.update({
                 'qp_i': crf, 'qp_p': crf, 'qp_b': crf,
                 'quality': 'quality'
             })
         else:  # libx265
-            self.set_encoder(encoder, preset, crf, profile=profile)
+            self.set_encoder(encoder, preset, crf, profile=profile, tune=tune)
         
         # Set threading based on encoder type
         if encoder == 'libx265':
@@ -597,7 +603,7 @@ class EncoderConfigBuilder:
                             bf: int, refs: int, width: int, height: int,
                             threads: Optional[int] = None, start_time: Optional[float] = None, 
                             duration: Optional[float] = None, preserve_hdr: bool = True,
-                            debug: bool = False) -> List[str]:
+                            debug: bool = False, tune: Optional[str] = None) -> List[str]:
         """Build VBR encoding command (replaces build_vbr_encode_cmd)."""
         self.reset()
         
@@ -617,7 +623,7 @@ class EncoderConfigBuilder:
             maxrate = int(bitrate * 1.75)
             bufsize = int(bitrate * 2.5)
             self.set_encoder(encoder, preset, bitrate=bitrate, profile=profile,
-                           rate_control='vbr_peak', maxrate=maxrate, bufsize=bufsize)
+                           rate_control='vbr_peak', maxrate=maxrate, bufsize=bufsize, tune=tune)
             # Add critical AMF quality parameter
             self.encoder_params['quality'] = 'quality'
         elif encoder == 'hevc_nvenc':
@@ -626,14 +632,14 @@ class EncoderConfigBuilder:
             # Map preset to NVENC preset
             nvenc_preset = 'p7' if preset == 'medium' else preset
             self.set_encoder(encoder, nvenc_preset, bitrate=bitrate, profile=profile,
-                           rate_control='vbr_hq', maxrate=maxrate, bufsize=bufsize)
+                           rate_control='vbr_hq', maxrate=maxrate, bufsize=bufsize, tune=tune)
         elif encoder == 'hevc_qsv':
             maxrate = int(bitrate * 1.5)
             bufsize = int(bitrate * 2.0)
             self.set_encoder(encoder, preset, bitrate=bitrate, profile=profile,
-                           maxrate=maxrate, bufsize=bufsize)
+                           maxrate=maxrate, bufsize=bufsize, tune=tune)
         else:  # libx265 - VBV constrained
-            self.set_encoder(encoder, preset, bitrate=bitrate, profile=profile)
+            self.set_encoder(encoder, preset, bitrate=bitrate, profile=profile, tune=tune)
         
         # Set specific quality parameters for VBR
         self.set_quality_params(bf=bf, refs=refs, keyint=240)

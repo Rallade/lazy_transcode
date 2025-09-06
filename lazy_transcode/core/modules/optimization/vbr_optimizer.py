@@ -832,8 +832,9 @@ logger = get_logger()
 
 def build_vbr_encode_cmd(infile: Path, outfile: Path, encoder: str, encoder_type: str, 
                         max_bitrate: int, avg_bitrate: int, preset: str = "medium", 
-                        bf: int = 3, refs: int = 3, preserve_hdr_metadata: bool = True) -> List[str]:
-    """Build VBR encoding command with proper HDR detection using EncoderConfigBuilder."""
+                        bf: int = 3, refs: int = 3, preserve_hdr_metadata: bool = True,
+                        auto_tune: bool = False) -> List[str]:
+    """Build VBR encoding command with proper HDR detection and auto-tune using EncoderConfigBuilder."""
     
     # Use the sophisticated EncoderConfigBuilder which has proper HDR detection
     builder = EncoderConfigBuilder()
@@ -844,11 +845,23 @@ def build_vbr_encode_cmd(infile: Path, outfile: Path, encoder: str, encoder_type
     # Determine threading based on encoder type
     threads = 4 if encoder_type == "hardware" else None  # Let x265 auto-decide for CPU
     
+    # Auto-detect optimal tune setting for software encoders
+    tune = None
+    if auto_tune and encoder_type == "software":
+        try:
+            from ..analysis.animation_detector import get_optimal_tune_for_content
+            tune = get_optimal_tune_for_content(infile, encoder)
+            if tune:
+                logger = get_logger("vbr_optimizer")
+                logger.info(f"Auto-detected content tune: {tune}")
+        except ImportError:
+            pass  # Animation detector not available
+    
     # Use the sophisticated VBR command builder which properly handles HDR detection
     cmd = builder.build_vbr_encode_cmd(
         str(infile), str(outfile), encoder, preset, max_bitrate,  # Use max_bitrate as the bitrate parameter
         bf, refs, width, height, threads=threads,
-        preserve_hdr=preserve_hdr_metadata, debug=DEBUG
+        preserve_hdr=preserve_hdr_metadata, debug=DEBUG, tune=tune
     )
     
     return cmd
@@ -1091,7 +1104,7 @@ def should_continue_optimization(trial_results: List[Dict], target_vmaf: float,
 def optimize_encoder_settings_vbr(infile: Path, encoder: str, encoder_type: str, 
                                   target_vmaf: float, vmaf_tolerance: float,
                                   clip_positions: list[int], clip_duration: int, 
-                                  max_safety_limit: int = 20) -> dict:
+                                  max_safety_limit: int = 20, auto_tune: bool = False) -> dict:
     """
     Find optimal VBR settings using bisection search and intelligent coordinate descent.
     
@@ -1243,7 +1256,8 @@ def optimize_encoder_settings_vbr(infile: Path, encoder: str, encoder_type: str,
                 infile, encoder, encoder_type, target_vmaf, vmaf_tolerance,
                 clip_positions, clip_duration, preset, bf, refs, test_cache,
                 bounds_history, source_bitrate_kbps, trial_results, global_bounds_reduction, encoder_type,
-                shared_clips  # Pass pre-extracted clips
+                shared_clips,  # Pass pre-extracted clips
+                auto_tune
             )
             
             # Store result for cross-trial analysis
@@ -1638,7 +1652,8 @@ def _test_parameter_combination(infile: Path, encoder: str, encoder_type: str,
                                trial_results: Optional[List[Dict]] = None,
                                global_bounds_reduction: Optional[Dict] = None,
                                encoder_type_param: str = "cpu",
-                               shared_clips: Optional[List[Path]] = None) -> dict:
+                               shared_clips: Optional[List[Path]] = None,
+                               auto_tune: bool = False) -> dict:
     """
     OPTIMIZATION #2&3: Enhanced parameter testing with dynamic bounds and progressive expansion.
     """
@@ -1682,7 +1697,8 @@ def _test_parameter_combination(infile: Path, encoder: str, encoder_type: str,
             clip_positions, clip_duration,
             int(min_bitrate), int(max_bitrate),
             preset, bf, refs,
-            expand_factor, test_cache=test_cache, shared_clips=shared_clips
+            expand_factor, test_cache=test_cache, shared_clips=shared_clips,
+            auto_tune=auto_tune
         )
         
         # Enhanced result analysis
@@ -1768,7 +1784,8 @@ def _bisect_bitrate(infile: Path, encoder: str, encoder_type: str,
                    expand_factor: int = 0,
                    base_iterations: int = 8,
                    test_cache: dict | None = None,
-                   shared_clips: Optional[List[Path]] = None) -> dict:
+                   shared_clips: Optional[List[Path]] = None,
+                   auto_tune: bool = False) -> dict:
     """Top-down bisection search to find minimum bitrate achieving target VMAF."""
     
     # Initialize cache if not provided
@@ -1819,7 +1836,8 @@ def _bisect_bitrate(infile: Path, encoder: str, encoder_type: str,
                     # Build VBR encode command with current parameters
                     encode_cmd = build_vbr_encode_cmd(clip, encoded_clip, encoder, encoder_type, 
                                                     bitrate_kbps, int(bitrate_kbps * 0.8), 
-                                                    preset, bf, refs, preserve_hdr_metadata=True)
+                                                    preset, bf, refs, preserve_hdr_metadata=True,
+                                                    auto_tune=auto_tune)
                     
                     if not DEBUG:
                         encode_cmd.extend(["-loglevel", "error"])
@@ -2149,7 +2167,7 @@ def _bisect_bitrate(infile: Path, encoder: str, encoder_type: str,
 
 
 def _test_vbr_encoding(infile: Path, encoder: str, encoder_type: str, bitrate_kbps: int,
-                      preserve_hdr_metadata: bool = True) -> bool:
+                      preserve_hdr_metadata: bool = True, auto_tune: bool = False) -> bool:
     """Test VBR encoding at specified bitrate."""
     test_output = infile.with_name(f"{infile.stem}.vbr_test_{bitrate_kbps}kbps{infile.suffix}")
     TEMP_FILES.add(str(test_output))
@@ -2158,7 +2176,8 @@ def _test_vbr_encoding(infile: Path, encoder: str, encoder_type: str, bitrate_kb
         cmd = build_vbr_encode_cmd(
             infile, test_output, encoder, encoder_type,
             bitrate_kbps, int(bitrate_kbps * 0.8),
-            preserve_hdr_metadata=preserve_hdr_metadata
+            preserve_hdr_metadata=preserve_hdr_metadata,
+            auto_tune=auto_tune
         )
 
         if not DEBUG:

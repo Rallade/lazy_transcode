@@ -277,7 +277,8 @@ def compute_vmaf_score(reference: Path, distorted: Path, n_threads: int = 0, ena
             if enable_cpu_monitoring:
                 cpu_monitor, cpu_stop_event = start_cpu_monitor()
 
-            result = run_command(cmd)
+            # VMAF calculation can take a long time for full episodes, use longer timeout
+            result = run_command(cmd, timeout=1800)  # 30 minutes timeout for VMAF
             raw_stderr = getattr(result, 'stderr', '')
             raw_stdout = getattr(result, 'stdout', '')
             stderr_text = raw_stderr if isinstance(raw_stderr, str) else ''
