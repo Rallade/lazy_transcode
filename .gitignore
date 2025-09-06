@@ -55,6 +55,7 @@ cover/
 .env.production
 .env.staging
 .env.test
+env.json
 *.env
 
 # Virtual environments
@@ -107,5 +108,5 @@ htmlcov/
 # Temporary debug scripts (development only)
 debug_*.py
 
-# Copilot instructions (local only - do not commit to remote)
+# GitHub files
 .github/
