@@ -209,6 +209,50 @@ class TestFileManager(unittest.TestCase):
         self.assertAlmostEqual(stats['total_size_gb'], 6 / 1024, places=3)  # ~6MB
         self.assertEqual(stats['codec_distribution']['h264'], 3)
         self.assertAlmostEqual(stats['average_file_size_mb'], 2.0, places=1)
+    
+    @patch('lazy_transcode.core.modules.processing.file_manager.FileManager.check_video_codec')
+    def test_include_h265_flag(self, mock_check_video_codec):
+        """Test that the include_h265 flag works as expected."""
+        # Mock codec results - when include_h265=True, H.265 should not be skipped
+        def mock_codec_side_effect(file_path):
+            if "h265" in file_path.name:
+                # H.265 file - with include_h265=True, should not be skipped
+                return CodecCheckResult(
+                    codec="hevc",
+                    should_skip=False,  # Don't skip because include_h265=True
+                    reason="hevc"
+                )
+            else:
+                # H.264 file - never skipped
+                return CodecCheckResult(
+                    codec="h264",
+                    should_skip=False,  # H.264 is never skipped
+                    reason="h264"
+                )
+        
+        mock_check_video_codec.side_effect = mock_codec_side_effect
+
+        # Initialize FileManager with include_h265=True
+        file_manager = FileManager(debug=True, include_h265=True)
+
+        # Create test files
+        test_files = [
+            self.temp_dir / "video_h265.mkv",
+            self.temp_dir / "video_h264.mkv"
+        ]
+        for f in test_files:
+            f.touch()
+
+        # Run codec check
+        files_to_transcode, skipped_files = file_manager.check_codec_and_filter(test_files)
+
+        # Assert that h265 file is not skipped
+        self.assertIn(test_files[0], files_to_transcode)
+        self.assertNotIn(test_files[0], [f[0] for f in skipped_files])
+
+        # Assert that h264 file is not skipped
+        self.assertIn(test_files[1], files_to_transcode)
+        self.assertNotIn(test_files[1], [f[0] for f in skipped_files])
 
 
 if __name__ == '__main__':

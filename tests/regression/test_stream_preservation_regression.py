@@ -138,10 +138,23 @@ class TestCommandGenerationIntegration(unittest.TestCase):
                             ffmpeg_calls = [call for call in mock_popen.call_args_list 
                                           if len(call[0]) > 0 and len(call[0][0]) > 0 and 'ffmpeg' in call[0][0][0]]
                             
-                            self.assertEqual(len(ffmpeg_calls), 1, "Expected exactly one ffmpeg transcoding command")
+                            # Should have content analysis + main transcoding commands
+                            self.assertGreaterEqual(len(ffmpeg_calls), 1, "Expected at least one ffmpeg command")
                             
-                            actual_cmd = ffmpeg_calls[0][0][0]
-                            cmd_str = ' '.join(str(arg) for arg in actual_cmd)
+                            # Find the main transcoding command (has output file and VBR parameters)
+                            main_cmd = None
+                            for call in ffmpeg_calls:
+                                cmd = call[0][0]
+                                cmd_str = ' '.join(str(arg) for arg in cmd)
+                                # Main command has output file name and VBR bitrate settings
+                                if str(output_file) in cmd_str and '-b:v' in cmd_str:
+                                    main_cmd = cmd
+                                    break
+                            
+                            self.assertIsNotNone(main_cmd, "Could not find main transcoding command")
+                            if main_cmd is not None:  # Type safety
+                                actual_cmd = main_cmd
+                                cmd_str = ' '.join(str(arg) for arg in actual_cmd)
                             
                             # These are the critical assertions that would catch the bug
                             self.assertIn('ffmpeg', cmd_str)
