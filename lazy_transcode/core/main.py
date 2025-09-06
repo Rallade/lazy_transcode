@@ -79,11 +79,20 @@ def process_vbr_mode(args, encoder: str, encoder_type: str, files: List[Path]) -
             logger.debug(f"SKIP {file.name}: Could not determine duration")
             continue
             
-        # Use new coverage-based clip selection (automatically scales clips for 10% coverage)
-        logger.debug(f"Using coverage-based clip selection for {duration/60:.1f}min video")
+        # Use new coverage-based clip selection (automatically scales clips for target coverage)
+        logger.debug(f"Using coverage-based clip selection for {duration/60:.1f}min video (coverage: {args.vbr_coverage:.1%})")
         clip_positions = get_coverage_based_vbr_clip_positions(
-            file, duration, clip_duration=30, target_coverage=0.10
+            file, duration, clip_duration=args.vbr_clip_duration, target_coverage=args.vbr_coverage
         )
+        
+        # Calculate clip target VMAF for minimum quality guarantee approach
+        # Target higher VMAF on clips to ensure no quality dips in complex scenes
+        clip_target_vmaf = args.vmaf_target - 2.0  # Ensure clips meet high standard for consistent quality
+        clip_tolerance = args.vmaf_tol  # Use tolerance as "good enough" threshold, not optimization range
+        
+        logger.vbr(f"Using minimum quality guarantee approach:")
+        logger.vbr(f"  Clip target: {clip_target_vmaf:.1f} (stop if ≥{clip_target_vmaf - clip_tolerance:.1f})")
+        logger.vbr(f"  Expected full episode: {args.vmaf_target:.1f}+")
         
         # Run VBR optimization
         if args.vbr_method == "compare":
@@ -92,7 +101,7 @@ def process_vbr_mode(args, encoder: str, encoder_type: str, files: List[Path]) -
             
             logger.vbr("Running optimization method comparison")
             comparison_results = optimize_vbr_with_gradient_methods(
-                file, file.with_suffix('.hevc.mkv'), args.vmaf_target,
+                file, file.with_suffix('.hevc.mkv'), clip_target_vmaf,  # Use clip target for comparison
                 encoder, encoder_type, args.preserve_hdr,
                 methods=["gradient-descent", "quasi-newton", "conjugate-gradient", "bisection"]
             )
@@ -104,7 +113,7 @@ def process_vbr_mode(args, encoder: str, encoder_type: str, files: List[Path]) -
             if successful_methods:
                 # Choose best method by accuracy (closest to target VMAF)
                 best_method = min(successful_methods.items(), 
-                                key=lambda x: abs(x[1].vmaf_score - args.vmaf_target) 
+                                key=lambda x: abs(x[1].vmaf_score - clip_target_vmaf) 
                                 if x[1].vmaf_score else 999)
                 
                 method_name, best_result = best_method
@@ -135,11 +144,12 @@ def process_vbr_mode(args, encoder: str, encoder_type: str, files: List[Path]) -
                 logger.vbr("All optimization methods failed, falling back to standard VBR")
                 result = optimize_encoder_settings_vbr(
                     file, encoder, encoder_type,
-                    target_vmaf=args.vmaf_target,
-                    vmaf_tolerance=args.vmaf_tol,
+                    target_vmaf=clip_target_vmaf,  # Use clip target for consistency
+                    vmaf_tolerance=clip_tolerance,
                     clip_positions=clip_positions,
                     clip_duration=args.vbr_clip_duration,
-                    max_safety_limit=args.vbr_max_trials
+                    max_safety_limit=args.vbr_max_trials,
+                    auto_tune=args.animation_tune
                 )
                 
         elif args.vbr_method in ["gradient-descent", "quasi-newton", "conjugate-gradient"]:
@@ -148,7 +158,7 @@ def process_vbr_mode(args, encoder: str, encoder_type: str, files: List[Path]) -
             
             logger.vbr(f"Using {args.vbr_method} optimization method")
             comparison_results = optimize_vbr_with_gradient_methods(
-                file, file.with_suffix('.hevc.mkv'), args.vmaf_target,
+                file, file.with_suffix('.hevc.mkv'), clip_target_vmaf,  # Use clip target
                 encoder, encoder_type, args.preserve_hdr,
                 methods=[args.vbr_method]
             )
@@ -176,21 +186,23 @@ def process_vbr_mode(args, encoder: str, encoder_type: str, files: List[Path]) -
                 logger.vbr(f"{args.vbr_method} method failed, falling back to bisection")
                 result = optimize_encoder_settings_vbr(
                     file, encoder, encoder_type,
-                    target_vmaf=args.vmaf_target,
-                    vmaf_tolerance=args.vmaf_tol,
+                    target_vmaf=clip_target_vmaf,  # Use clip target for consistency
+                    vmaf_tolerance=clip_tolerance,
                     clip_positions=clip_positions,
                     clip_duration=args.vbr_clip_duration,
-                    max_safety_limit=args.vbr_max_trials
+                    max_safety_limit=args.vbr_max_trials,
+                    auto_tune=args.animation_tune
                 )
         else:
-            # Use standard bisection method
+            # Use standard bisection method with minimum quality guarantee
             result = optimize_encoder_settings_vbr(
                 file, encoder, encoder_type,
-                target_vmaf=args.vmaf_target,
-                vmaf_tolerance=args.vmaf_tol,
+                target_vmaf=clip_target_vmaf,  # Target higher VMAF on clips for quality guarantee
+                vmaf_tolerance=clip_tolerance,  # Use as "good enough" threshold, not optimization range
                 clip_positions=clip_positions,
                 clip_duration=args.vbr_clip_duration,
-                max_safety_limit=args.vbr_max_trials
+                max_safety_limit=args.vbr_max_trials,
+                auto_tune=args.animation_tune
             )
         
         if result.get('success', False):
@@ -300,6 +312,8 @@ def main():
                        help="Number of clips for VBR optimization (default: 2)")
     parser.add_argument("--vbr-clip-duration", type=int, default=60,
                        help="Duration of each VBR test clip in seconds (default: 60)")
+    parser.add_argument("--vbr-coverage", type=float, default=0.10,
+                       help="Target coverage percentage for VBR clip sampling (default: 0.10 = 10%%)")
     parser.add_argument("--vbr-max-trials", type=int, default=8,
                        help="Base maximum VBR trials - system adapts based on convergence (default: 8)")
     parser.add_argument("--vbr-method", choices=["bisection", "gradient-descent", "quasi-newton", "conjugate-gradient", "compare"],
@@ -311,10 +325,14 @@ def main():
                        help="Force specific encoder (default: auto-detect)")
     parser.add_argument("--cpu", action="store_true", 
                        help="Force CPU/software encoding (libx265) instead of hardware acceleration")
+    parser.add_argument("--animation-tune", action="store_true", default=False,
+                       help="Enable automatic animation tune detection for better anime compression (default: disabled)")
     parser.add_argument("--preserve-hdr", action="store_true", default=True,
                        help="Preserve HDR metadata (default: enabled)")
     
     # Processing options
+    parser.add_argument("--include-h265", action="store_true",
+                       help="Include H.265/HEVC files as candidates for transcoding (do not skip efficient codecs)")
     parser.add_argument("--limit", type=int, help="Limit number of files to process")
     parser.add_argument("--dry-run", action="store_true", help="Show what would be processed without encoding")
     parser.add_argument("--non-destructive", action="store_true", 
@@ -324,7 +342,27 @@ def main():
     parser.add_argument("--debug", action="store_true", help="Enable debug output")
     parser.add_argument("--no-timestamps", action="store_true", help="Disable timestamps in log output")
     
+    # Enhanced features
+    parser.add_argument("--cleanup", action="store_true",
+                       help="Clean up temporary files and samples recursively")
+    parser.add_argument("--preset", choices=["fast", "medium", "slow"], default="medium",
+                       help="Encoding preset (default: medium)")
+    parser.add_argument("--encoder-type", choices=["software", "hardware"], default=None,
+                       help="Encoder type (default: auto-detect)")
+    
     args = parser.parse_args()
+    
+    # Handle cleanup command
+    if args.cleanup:
+        input_path = Path(args.input)
+        print(f"[INFO] Cleaning up temporary files in: {input_path}")
+        file_manager = FileManager(debug=True, include_h265=getattr(args, 'include_h265', False))
+        removed_count = file_manager.startup_scavenge(input_path)
+        if removed_count > 0:
+            print(f"[INFO] Cleaned up {removed_count} temporary file(s)")
+        else:
+            print("[INFO] No temporary files found to clean up")
+        return 0
     
     # Set debug mode
     if args.debug:
@@ -345,7 +383,7 @@ def main():
         return 1
     
     # Discover files
-    file_manager = FileManager(debug=args.debug)
+    file_manager = FileManager(debug=args.debug, include_h265=getattr(args, 'include_h265', False))
     
     if input_path.is_file():
         files = [input_path]
@@ -438,7 +476,8 @@ def main():
                 file, output_file, encoder, encoder_type,
                 max_bitrate=result['bitrate'], 
                 avg_bitrate=int(result['bitrate'] * 0.8),  # 80% of max for average
-                preserve_hdr_metadata=args.preserve_hdr
+                preserve_hdr_metadata=args.preserve_hdr,
+                auto_tune=args.animation_tune
             )
             
             if success:
